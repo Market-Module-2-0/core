@@ -50,6 +50,8 @@ func (s *WasmTestSuite) Swap(contractPath string, executeFunc func(contract sdk.
 	)
 	// Trigger refill from accumulator to market to ensure liquidity is present pre-swap
 	s.App.MarketKeeper.ProcessEpochIfDue(s.Ctx)
+	// Oracle freshness guard requires a recorded tally time.
+	s.App.MarketKeeper.SetLastOracleTallyTime(s.Ctx, s.Ctx.BlockTime().Unix())
 	// Sanity: market module should now hold the liquidity
 	marketBal := s.App.BankKeeper.GetBalance(s.Ctx, s.App.AccountKeeper.GetModuleAddress(markettypes.ModuleName), core.MicroSDRDenom)
 	s.Require().True(marketBal.Amount.GTE(sdkmath.NewInt(1_000_000)))
@@ -119,6 +121,8 @@ func (s *WasmTestSuite) SwapSend(contractPath string, executeFunc func(contract 
 	)
 	// Trigger refill from accumulator to market to ensure liquidity is present pre-swap
 	s.App.MarketKeeper.ProcessEpochIfDue(s.Ctx)
+	// Oracle freshness guard requires a recorded tally time.
+	s.App.MarketKeeper.SetLastOracleTallyTime(s.Ctx, s.Ctx.BlockTime().Unix())
 	// Sanity: market module should now hold the liquidity
 	marketBal := s.App.BankKeeper.GetBalance(s.Ctx, s.App.AccountKeeper.GetModuleAddress(markettypes.ModuleName), core.MicroSDRDenom)
 	s.Require().True(marketBal.Amount.GTE(sdkmath.NewInt(1_000_000)))

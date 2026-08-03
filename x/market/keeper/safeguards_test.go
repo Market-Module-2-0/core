@@ -552,3 +552,30 @@ func TestTWAPDeviationUsesMetaUSTRate(t *testing.T) {
 	_, err = msgServer.Swap(sdk.WrapSDKContext(input.Ctx), types.NewMsgSwap(trader, offerCoin, core.MicroUSDDenom))
 	require.ErrorIs(t, err, types.ErrTWAPDeviation)
 }
+
+// TestOracleFreshnessRequiresTally verifies the freshness guard fails closed when the
+// oracle has never recorded a tally (lastTallyTime == 0), instead of allowing the swap
+// through unguarded during the bootstrap window.
+func TestOracleFreshnessRequiresTally(t *testing.T) {
+	input := CreateTestInput(t)
+
+	lunaPriceInUSD := sdkmath.LegacyNewDecWithPrec(5, 0)
+	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, oracletypes.MetaUSDDenom, lunaPriceInUSD)
+	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, core.MicroSDRDenom, sdkmath.LegacyOneDec())
+	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, core.MicroUSDDenom, lunaPriceInUSD)
+
+	poolCoins := sdk.NewCoins(
+		sdk.NewCoin(core.MicroLunaDenom, sdkmath.NewInt(10_000_000)),
+		sdk.NewCoin(core.MicroUSDDenom, sdkmath.NewInt(50_000_000)),
+	)
+	require.NoError(t, FundModuleAccount(input, types.ModuleName, poolCoins))
+
+	// Advance block time but deliberately do NOT record a tally time.
+	input.Ctx = input.Ctx.WithBlockTime(time.Unix(1_000_000, 0))
+
+	trader := Addrs[0]
+	msgServer := NewMsgServerImpl(input.MarketKeeper)
+	offerCoin := sdk.NewCoin(core.MicroLunaDenom, sdkmath.NewInt(1_000_000))
+	_, err := msgServer.Swap(sdk.WrapSDKContext(input.Ctx), types.NewMsgSwap(trader, offerCoin, core.MicroUSDDenom))
+	require.ErrorIs(t, err, types.ErrOraclePriceStale, "swap must fail closed when no oracle tally has been recorded")
+}
