@@ -73,18 +73,24 @@ func (k msgServer) handleSwapRequest(ctx sdk.Context,
 		return nil, types.ErrNoEffectivePrice
 	}
 
-	// Oracle freshness check: ensure oracle prices are recent enough (time-based, not block-based)
+	// Oracle freshness check: ensure oracle prices are recent enough (time-based, not block-based).
+	// A zero tally time means the oracle has never completed a tally, so freshness cannot be
+	// established - fail closed rather than letting the swap through unguarded. In production
+	// this window is already covered by the meta-rate guard above (prices and the tally time
+	// are written together by the oracle EndBlocker), so this is defense-in-depth ensuring the
+	// guard never silently no-ops.
 	lastTallyTime := k.GetLastOracleTallyTime(ctx)
-	if lastTallyTime > 0 {
-		currentTime := ctx.BlockTime().Unix()
-		maxAgeSeconds := int64(k.MaxOracleAgeSeconds(ctx))
+	if lastTallyTime == 0 {
+		return nil, types.ErrOraclePriceStale
+	}
+	currentTime := ctx.BlockTime().Unix()
+	maxAgeSeconds := int64(k.MaxOracleAgeSeconds(ctx))
 
-		// Calculate time elapsed since last tally
-		secondsSinceTally := currentTime - lastTallyTime
+	// Calculate time elapsed since last tally
+	secondsSinceTally := currentTime - lastTallyTime
 
-		if secondsSinceTally > maxAgeSeconds {
-			return nil, types.ErrOraclePriceStale
-		}
+	if secondsSinceTally > maxAgeSeconds {
+		return nil, types.ErrOraclePriceStale
 	}
 
 	// Compute exchange rates between the ask and offer

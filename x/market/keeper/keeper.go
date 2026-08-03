@@ -73,15 +73,19 @@ func (k Keeper) Logger(ctx sdk.Context) log.Logger {
 
 // SetAllowedSwapDenoms sets which denoms are allowed to be swapped with uluna.
 // Note: This is intended for configuration/tests; it is not persisted.
-// It must be called before the Keeper is handed to the AppModules, which capture it
-// by value: replacing the map afterwards (e.g. from an upgrade handler) is not seen
-// by the msg server or EndBlocker. For production, change the default in NewKeeper.
+//
+// The map is mutated in place rather than replaced. The Keeper is copied by value
+// into the msg server and module wiring, but every copy shares this same underlying
+// map reference, so an in-place update is visible to all of them; assigning a brand
+// new map would only affect this receiver's copy and silently no-op elsewhere.
+// For production the effective default is still the one set in NewKeeper.
 func (k *Keeper) SetAllowedSwapDenoms(denoms []string) {
-	m := make(map[string]bool, len(denoms))
-	for _, d := range denoms {
-		m[d] = true
+	for d := range k.allowedSwapDenoms {
+		delete(k.allowedSwapDenoms, d)
 	}
-	k.allowedSwapDenoms = m
+	for _, d := range denoms {
+		k.allowedSwapDenoms[d] = true
+	}
 }
 
 func (k Keeper) isAllowedSwapDenom(denom string) bool {
@@ -145,6 +149,12 @@ func (k Keeper) ProcessEpochIfDue(ctx sdk.Context) {
 	last := k.getLastEpochHeight(ctx)
 	now := ctx.BlockHeight()
 	epochLen := k.EpochLengthBlocks(ctx)
+	// Cold start (last == 0, i.e. the first block after genesis/upgrade) intentionally
+	// runs a full epoch immediately: it burns the market module account balance and then
+	// refills the pool from the accumulator. Initial swap liquidity must therefore be
+	// seeded into the accumulator (AccumulatorModuleName), NOT the market module account
+	// directly - anything sitting in the market account on the first block is burned before
+	// the refill. See x/market/spec/01_concepts.md.
 	if last != 0 && uint64(now-last) < epochLen {
 		return
 	}

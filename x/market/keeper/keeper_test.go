@@ -53,3 +53,22 @@ func TestReplenishPools(t *testing.T) {
 	expectedDelta = diff.Sub(replenishAmt)
 	require.Equal(t, expectedDelta, terraPoolDelta)
 }
+
+// TestSetAllowedSwapDenomsPropagatesToCopies verifies that updating the allowed swap
+// denoms mutates the shared underlying map, so a Keeper copied by value (as happens
+// when it is handed to the msg server / module wiring) observes the change too. With
+// the previous map-replacement implementation this would silently no-op on the copy.
+func TestSetAllowedSwapDenomsPropagatesToCopies(t *testing.T) {
+	input := CreateTestInput(t)
+
+	k := input.MarketKeeper
+	// Copy by value, mirroring how the keeper is captured by the msg server/module.
+	kCopy := k
+
+	k.SetAllowedSwapDenoms([]string{core.MicroSDRDenom})
+
+	require.True(t, kCopy.isAllowedSwapDenom(core.MicroSDRDenom),
+		"copy should observe the updated allowed set via the shared map")
+	require.False(t, kCopy.isAllowedSwapDenom(core.MicroUSDDenom),
+		"cleared denom should no longer be allowed for the copy either")
+}

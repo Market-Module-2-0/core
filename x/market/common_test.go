@@ -34,6 +34,10 @@ func setup(t *testing.T) (keeper.TestInput, types.MsgServer) {
 	)
 	require.NoError(t, keeper.FundModuleAccount(input, markettypes.ModuleName, poolCoins))
 
+	// The oracle freshness guard fails closed unless a tally time is recorded; seed
+	// it so swaps reflect a chain where the oracle has tallied at least once.
+	input.MarketKeeper.SetLastOracleTallyTime(input.Ctx, input.Ctx.BlockTime().Unix())
+
 	h := keeper.NewMsgServerImpl(input.MarketKeeper)
 
 	return input, h
