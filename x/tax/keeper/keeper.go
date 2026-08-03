@@ -158,7 +158,13 @@ func (k Keeper) GetGasPriceForDenom(ctx sdk.Context, denom string) sdkmath.Legac
 }
 
 func (k Keeper) IsReverseCharge(ctx sdk.Context, emit bool) bool {
-	if !ctx.Value(types.ContextKeyTaxReverseCharge).(bool) {
+	// The reverse-charge flag is set by the ante handler (custom/auth/ante/fee.go)
+	// and by the wasm message handler. Any execution path that reaches a taxed
+	// message without one of those setting the flag (e.g. a gov- or module-initiated
+	// message) leaves the context value unset; treat a missing/invalid value as
+	// "not reverse charge" instead of panicking on a failed type assertion.
+	reverseCharge, ok := ctx.Value(types.ContextKeyTaxReverseCharge).(bool)
+	if !ok || !reverseCharge {
 		if emit {
 			ctx.EventManager().EmitEvent(
 				sdk.NewEvent(
