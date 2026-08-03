@@ -4,6 +4,28 @@ order: 1
 
 # Concepts
 
+## Market Module 2.0 model (important)
+
+> **This module no longer mints or burns to service swaps.** In the original design a
+> swap burned the offered coin and **minted** the asked coin, which allowed unbounded
+> LUNC issuance and enabled the 2022 death spiral. Market Module 2.0 instead pays swaps
+> out of a **finite, pre-funded liquidity pool** held by the `market` module account,
+> which is granted **`Burner` only (no `Minter`)**.
+>
+> - Swaps draw from the pool and fail with `ErrInsufficientLiquidity` when it is empty.
+> - The pool is funded from redirected burn-tax proceeds (`TaxRedirectRate`), which
+>   accumulate in the `market_accumulator` module account.
+> - Once per epoch (`EpochLengthBlocks`, default 30 days) the module burns any leftover
+>   pool balance and refills the pool from the accumulator. **Initial liquidity must be
+>   seeded into the accumulator, not the market account** — see *Epoch burn & refill*.
+> - Every swap is additionally gated by safeguards: allowed-pair check (uluna ↔ an
+>   allowed denom), oracle freshness (`MaxOracleAgeSeconds`), TWAP deviation
+>   (`MaxTwapDeviation`), a daily drain cap (`DailyCapFactor`), and the minimum spread.
+>
+> The constant-product / spread math below still governs how the uluna ↔ Terra price
+> and spread are computed; only the settlement mechanism (pool transfer vs mint/burn)
+> has changed.
+
 ## Swap Fees
 Since Terra's price feed is derived from validator oracles, there is necessarily a delay between the on-chain reported price and the actual realtime price.
 
@@ -62,27 +84,43 @@ This mechanism ensures liquidity and acts as a sort of low-pass filter, allowing
 
 ## Swap Procedure
 
-1. Market module receives `MsgSwap` message and performs basic validation checks
+1. Market module receives `MsgSwap`/`MsgSwapSend` and performs basic validation checks.
 
-2. Calculate `ask` and `spread`  using `k.ComputeSwap()`
+2. Enforce the safeguards: the pair must be uluna ↔ an allowed denom
+   (`isAllowedSwapDenom`), the oracle meta rate must exist, and the oracle tally must be
+   fresh (`MaxOracleAgeSeconds`).
 
-3. Update `TerraPoolDelta` with `k.ApplySwapToPool()`
+3. Calculate `ask` and `spread` using `k.ComputeSwap()`.
 
-4. Transfer `OfferCoin` from account to module using `supply.SendCoinsFromAccountToModule()`
+4. Enforce the TWAP deviation guard on each non-uluna leg (`MaxTwapDeviation`).
 
-5. Burn offered coins, with `supply.BurnCoins()`.
+5. Compute the spread fee `fee = spread * ask` and subtract it from the asked amount.
 
-6. Let `fee = spread * ask`, this is the spread fee.
+6. Update `TerraPoolDelta` with `k.ApplySwapToPool()`.
 
-7. Mint `ask - fee` coins of `AskDenom` with `supply.MintCoins()`. This implicitly applies the spread fee as the `fee` coins are burned.
+7. Transfer `OfferCoin` from the trader to the `market` module account with
+   `SendCoinsFromAccountToModule()`. **The offered coin is not burned** — it stays in the
+   pool as liquidity for the opposite direction.
 
-8. Send newly minted coins to trader with `supply.SendCoinsFromModuleToAccount()`
+8. Check that the pool holds enough of the ask denom to cover the payout plus the fee,
+   and that the swap does not exceed the daily drain cap (`DailyCapFactor`). If either
+   fails, the swap is rejected (`ErrInsufficientLiquidity` / `ErrDailyCapExceeded`).
 
-9. Emit `swap` event to publicize swap and record spread fee
+9. Pay the asked amount to the receiver from the pool with `SendCoinsFromModuleToAccount()`.
+   **No coins are minted.**
 
-If the trader's `Account` has insufficient balance to execute the swap, the swap transaction fails.
+10. Split the spread fee per governance params (`SwapFeeBurnRate`, `SwapFeeCommunityRate`,
+    remainder to the oracle reward pool).
 
-Upon successful completion of Terra<>Luna swaps, a portion of the coins to be credited to the user's account is withheld as the spread fee.
+11. Emit the `swap` event with the spread fee.
+
+If the pool has insufficient liquidity for the ask denom, or the daily cap would be
+exceeded, the swap transaction fails.
 
 ## Seigniorage
-For Luna swaps into Terra, the Luna that recaptured by the protocol is burned and is called seigniorage -- the value generated from issuing new Terra. At the end of the epoch, the total seigniorage for the epoch will be calculated and reintroduced into the economy as ballot rewards for the exchange rate oracle and to the community pool by the Treasury module, described more fully [here](../../treasury/spec/README.md).
+Market Module 2.0 does **not** produce seigniorage by minting Terra: swaps are settled
+from the finite pool, so no new supply is created. Value flows are limited to (a) the
+spread fee split (burn / community pool / oracle), and (b) the per-epoch burn of any
+leftover pool balance before the pool is refilled from the accumulator. See the
+*Epoch burn & refill* behavior in `ProcessEpochIfDue` and the Treasury module's
+`TaxRedirectRate`, described [here](../../treasury/spec/README.md).
