@@ -61,8 +61,28 @@ func (bc *baseConfigurer) RunValidators() error {
 
 func (bc *baseConfigurer) runValidators(chainConfig *chain.Config) error {
 	bc.t.Logf("starting %s validator containers...", chainConfig.ID)
-	for _, node := range chainConfig.NodeConfigs {
-		if err := node.Run(); err != nil {
+	nodes := make([]validatorNode, len(chainConfig.NodeConfigs))
+	for i, node := range chainConfig.NodeConfigs {
+		nodes[i] = node
+	}
+	return startValidatorSet(nodes)
+}
+
+type validatorNode interface {
+	Start() error
+	WaitForStartup(expectedPeers int) error
+}
+
+func startValidatorSet(nodes []validatorNode) error {
+	for _, node := range nodes {
+		if err := node.Start(); err != nil {
+			return err
+		}
+	}
+
+	expectedPeers := len(nodes) - 1
+	for _, node := range nodes {
+		if err := node.WaitForStartup(expectedPeers); err != nil {
 			return err
 		}
 	}

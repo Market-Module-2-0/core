@@ -52,10 +52,10 @@ func NewNodeConfig(t *testing.T, initNode *initialization.Node, initConfig *init
 	}
 }
 
-// Run runs a node container for the given nodeIndex.
-// The node configuration must be already added to the chain config prior to calling this
-// method.
-func (n *NodeConfig) Run() error {
+// Start creates the node container and RPC client without waiting for blocks.
+// Multi-validator chains must start every container before any node waits for
+// consensus, otherwise the first validator cannot reach the required quorum.
+func (n *NodeConfig) Start() error {
 	n.t.Logf("starting node container: %s", n.Name)
 	resource, err := n.containerManager.RunNodeResource(n.Name, n.ConfigDir)
 	if err != nil {
@@ -69,41 +69,86 @@ func (n *NodeConfig) Run() error {
 	}
 
 	n.rpcClient = rpcClient
+	return nil
+}
 
-	require.Eventually(
-		n.t,
-		func() bool {
-			// This fails if unsuccessful.
-			_, err := n.QueryCurrentHeight()
+// WaitForStartup verifies RPC, P2P connectivity and block production after all
+// validators have been started.
+func (n *NodeConfig) WaitForStartup(expectedPeers int) error {
+	if n.rpcClient == nil {
+		return fmt.Errorf("node %s has not been started", n.Name)
+	}
+
+	if err := pollNodeCondition(initialization.TwoMin, time.Second, func() (bool, error) {
+		_, err := n.QueryCurrentHeight()
+		return err == nil, err
+	}); err != nil {
+		return fmt.Errorf("node %s RPC did not become ready: %w", n.Name, err)
+	}
+
+	if expectedPeers > 0 {
+		if err := pollNodeCondition(initialization.TwoMin, time.Second, func() (bool, error) {
+			netInfo, err := n.rpcClient.NetInfo(context.Background())
 			if err != nil {
-				return false
+				return false, err
 			}
-			n.t.Logf("started node container: %s", n.Name)
-			return true
-		},
-		initialization.TwoMin,
-		time.Second,
-		"Terra node failed to produce blocks",
-	)
+			return netInfo.NPeers >= expectedPeers, nil
+		}); err != nil {
+			return fmt.Errorf("node %s did not connect to %d peers: %w", n.Name, expectedPeers, err)
+		}
+	}
+
+	if err := pollNodeCondition(initialization.TwoMin, time.Second, func() (bool, error) {
+		height, err := n.QueryCurrentHeight()
+		return err == nil && height > 0, err
+	}); err != nil {
+		return fmt.Errorf("node %s failed to produce its first block: %w", n.Name, err)
+	}
+
+	n.t.Logf("started node container: %s", n.Name)
 
 	// Wait for 2 more blocks to confirm p2p connections are established.
 	// Without this, a just-restarted node may not yet have peers and any
 	// tx broadcast to it would sit in the local mempool and never be committed.
 	firstHeight, _ := n.QueryCurrentHeight()
 	if firstHeight > 0 {
-		require.Eventually(
-			n.t,
-			func() bool {
-				h, err := n.QueryCurrentHeight()
-				return err == nil && h >= firstHeight+2
-			},
-			initialization.TwoMin,
-			time.Second,
-			"Terra node failed to advance blocks after start",
-		)
+		if err := pollNodeCondition(initialization.TwoMin, time.Second, func() (bool, error) {
+			height, err := n.QueryCurrentHeight()
+			return err == nil && height >= firstHeight+2, err
+		}); err != nil {
+			return fmt.Errorf("node %s failed to advance two blocks after start: %w", n.Name, err)
+		}
 	}
 
 	return n.extractOperatorAddressIfValidator()
+}
+
+// Run starts and waits for one node. It is retained for nodes restarted after
+// the rest of their validator set is already producing blocks.
+func (n *NodeConfig) Run() error {
+	if err := n.Start(); err != nil {
+		return err
+	}
+	return n.WaitForStartup(1)
+}
+
+func pollNodeCondition(timeout, interval time.Duration, condition func() (bool, error)) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		done, err := condition()
+		if done {
+			return nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+		time.Sleep(interval)
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("condition not met within %s", timeout)
 }
 
 // Stop stops the node from running and removes its container.

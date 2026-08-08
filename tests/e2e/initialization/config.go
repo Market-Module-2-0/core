@@ -346,20 +346,16 @@ func updateBankGenesis(bankGenState *banktypes.GenesisState) {
 }
 
 func updateMarketGenesis(marketGenState *markettypes.GenesisState) {
-	// WARNING: The values below are E2E-ONLY knobs tuned for fast test execution.
-	// They MUST NOT ship to mainnet/testnet genesis:
-	//   - EpochLengthBlocks=50 triggers an epoch burn+refill every ~2.5 minutes
-	//     (at 3s/block) instead of the 30-day production cadence.
-	//   - MaxOracleAgeSeconds=2 rejects any swap whose oracle data is older than
-	//     2 seconds, which would halt swaps on a real network.
-	// What keeps them out of production is that package initialization is imported
-	// only from tests/e2e; production genesis comes from markettypes.DefaultParams.
-	const (
-		e2eEpochLengthBlocks = 50
-		e2eMaxOracleAgeSecs  = 2
-	)
+	// WARNING: this E2E-only value triggers epoch processing every ~2.5 minutes
+	// instead of the production cadence. This package is imported only by tests;
+	// production genesis comes from markettypes.DefaultParams.
+	const e2eEpochLengthBlocks = 50
 	marketGenState.Params.EpochLengthBlocks = e2eEpochLengthBlocks
-	marketGenState.Params.MaxOracleAgeSeconds = e2eMaxOracleAgeSecs
+
+	// Keep the production freshness window. A two-second window is shorter than
+	// a multi-validator transaction round and makes otherwise valid E2E swaps
+	// timing-dependent. Staleness boundaries are covered by keeper tests.
+	marketGenState.Params.MaxOracleAgeSeconds = markettypes.DefaultMaxOracleAgeSeconds
 }
 
 func updateOracleGenesis(oracleGenState *oracletypes.GenesisState) {

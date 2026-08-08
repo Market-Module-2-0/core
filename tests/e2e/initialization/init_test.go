@@ -61,6 +61,16 @@ func TestChainInit(t *testing.T) {
 		actualNode := actualNodes[i]
 
 		validateNode(t, id, dataDir, expectedConfig, actualNode)
+		if actualNode.IsValidator {
+			configBytes, err := os.ReadFile(filepath.Join(actualNode.ConfigDir, "config", "config.toml"))
+			require.NoError(t, err)
+			require.NotContains(t, string(configBytes), actualNode.PeerID)
+			for _, peer := range actualNodes {
+				if peer.PeerID != actualNode.PeerID {
+					require.Contains(t, string(configBytes), peer.PeerID)
+				}
+			}
+		}
 	}
 }
 

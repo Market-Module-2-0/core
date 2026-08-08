@@ -1,9 +1,11 @@
 # syntax=docker/dockerfile:1
 
 ARG source=./
-    ARG GO_VERSION="1.24.7"
-    ARG BUILDPLATFORM=linux/amd64
-    ARG BASE_IMAGE="golang:${GO_VERSION}-alpine3.21"
+ARG GO_VERSION="1.24.7"
+ARG BUILDPLATFORM
+ARG TARGETOS
+ARG TARGETARCH
+ARG BASE_IMAGE="golang:${GO_VERSION}-alpine3.21"
 FROM --platform=${BUILDPLATFORM} ${BASE_IMAGE} AS base
 
 ###############################################################################
@@ -15,12 +17,11 @@ FROM base AS builder-stage-1
 ARG source
 ARG GIT_COMMIT
 ARG GIT_VERSION
-ARG BUILDPLATFORM
-ARG GOOS=linux \
-    GOARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 
-ENV GOOS=$GOOS \ 
-    GOARCH=$GOARCH
+ENV GOOS=$TARGETOS \
+    GOARCH=$TARGETARCH
 
 # NOTE: add libusb-dev to run with LEDGER_ENABLED=true
 RUN set -eux &&\
@@ -56,14 +57,14 @@ RUN set -eux &&\
     WASMVM_VERSION=$(go list -m github.com/CosmWasm/wasmvm/v3 | cut -d ' ' -f 2) && \
     WASMVM_DOWNLOADS="https://github.com/CosmWasm/wasmvm/releases/download/${WASMVM_VERSION}"; \
     wget ${WASMVM_DOWNLOADS}/checksums.txt -O /tmp/checksums.txt; \
-    if [ ${BUILDPLATFORM} = "linux/amd64" ]; then \
+    if [ ${TARGETARCH} = "amd64" ]; then \
         WASMVM_URL="${WASMVM_DOWNLOADS}/libwasmvm_muslc.x86_64.a"; \
         LIB_NAME="libwasmvm_muslc.x86_64.a"; \
-    elif [ ${BUILDPLATFORM} = "linux/arm64" ]; then \
+    elif [ ${TARGETARCH} = "arm64" ]; then \
         WASMVM_URL="${WASMVM_DOWNLOADS}/libwasmvm_muslc.aarch64.a"; \
         LIB_NAME="libwasmvm_muslc.aarch64.a"; \
     else \
-        echo "Unsupported Build Platform ${BUILDPLATFORM}"; \
+        echo "Unsupported target architecture ${TARGETARCH}"; \
         exit 1; \
     fi; \
     wget ${WASMVM_URL} -O /tmp/${LIB_NAME}; \
@@ -74,9 +75,9 @@ RUN set -eux &&\
 # Place libwasmvm_muslc.a in correct directory structure for wasmvm v2
 RUN set -eux &&\
     WASMVM_VERSION=$(go list -m github.com/CosmWasm/wasmvm/v3 | cut -d ' ' -f 2) && \
-    if [ ${BUILDPLATFORM} = "linux/amd64" ]; then \
+    if [ ${TARGETARCH} = "amd64" ]; then \
         LIB_NAME="libwasmvm_muslc.x86_64.a"; \
-    elif [ ${BUILDPLATFORM} = "linux/arm64" ]; then \
+    elif [ ${TARGETARCH} = "arm64" ]; then \
         LIB_NAME="libwasmvm_muslc.aarch64.a"; \
     fi; \
     mkdir -p /go/pkg/mod/github.com/!cosm!wasm/wasmvm/v3@${WASMVM_VERSION}/internal/api/; \
@@ -87,11 +88,11 @@ RUN set -eux &&\
 FROM builder-stage-1 AS builder-stage-2
 
 ARG source
-ARG GOOS=linux \
-    GOARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 
-ENV GOOS=$GOOS \ 
-    GOARCH=$GOARCH
+ENV GOOS=$TARGETOS \
+    GOARCH=$TARGETARCH
 
 # Copy the remaining files
 COPY ${source} .

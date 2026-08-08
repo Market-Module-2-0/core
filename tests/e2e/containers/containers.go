@@ -26,6 +26,7 @@ const (
 	// per CLI command.
 	maxDebugLogsPerCommand = 3
 	GasLimit               = 4000000
+	OracleGasLimit         = 1000000
 )
 
 var (
