@@ -31,6 +31,18 @@ type GenesisState struct {
 	Params Params `protobuf:"bytes,1,opt,name=params,proto3" json:"params"`
 	// the gap between the TerraPool and the BasePool
 	TerraPoolDelta cosmossdk_io_math.LegacyDec `protobuf:"bytes,2,opt,name=terra_pool_delta,json=terraPoolDelta,proto3,customtype=cosmossdk.io/math.LegacyDec" json:"terra_pool_delta"`
+	// market_enabled is the activation/governance base state. Safety guards may
+	// still prevent swap execution while this value is true.
+	MarketEnabled bool `protobuf:"varint,3,opt,name=market_enabled,json=marketEnabled,proto3" json:"market_enabled,omitempty"`
+	// initial_activation_pending is true while the first post-upgrade liquidity
+	// epoch is being collected.
+	InitialActivationPending bool `protobuf:"varint,4,opt,name=initial_activation_pending,json=initialActivationPending,proto3" json:"initial_activation_pending,omitempty"`
+	// last_epoch_height anchors the current burn/refill epoch.
+	LastEpochHeight int64 `protobuf:"varint,5,opt,name=last_epoch_height,json=lastEpochHeight,proto3" json:"last_epoch_height,omitempty"`
+	// oracle_halted is true when the Oracle quorum guard disabled swaps.
+	OracleHalted bool `protobuf:"varint,6,opt,name=oracle_halted,json=oracleHalted,proto3" json:"oracle_halted,omitempty"`
+	// oracle_quorum_states persist consecutive sub-quorum block counters.
+	OracleQuorumStates []OracleQuorumState `protobuf:"bytes,7,rep,name=oracle_quorum_states,json=oracleQuorumStates,proto3" json:"oracle_quorum_states"`
 }
 
 func (m *GenesisState) Reset()         { *m = GenesisState{} }
@@ -73,8 +85,97 @@ func (m *GenesisState) GetParams() Params {
 	return Params{}
 }
 
+func (m *GenesisState) GetMarketEnabled() bool {
+	if m != nil {
+		return m.MarketEnabled
+	}
+	return false
+}
+
+func (m *GenesisState) GetInitialActivationPending() bool {
+	if m != nil {
+		return m.InitialActivationPending
+	}
+	return false
+}
+
+func (m *GenesisState) GetLastEpochHeight() int64 {
+	if m != nil {
+		return m.LastEpochHeight
+	}
+	return 0
+}
+
+func (m *GenesisState) GetOracleHalted() bool {
+	if m != nil {
+		return m.OracleHalted
+	}
+	return false
+}
+
+func (m *GenesisState) GetOracleQuorumStates() []OracleQuorumState {
+	if m != nil {
+		return m.OracleQuorumStates
+	}
+	return nil
+}
+
+// OracleQuorumState is the persisted GAP-002 counter for one Oracle denom.
+type OracleQuorumState struct {
+	OracleDenom             string `protobuf:"bytes,1,opt,name=oracle_denom,json=oracleDenom,proto3" json:"oracle_denom,omitempty"`
+	ConsecutiveMissedBlocks uint64 `protobuf:"varint,2,opt,name=consecutive_missed_blocks,json=consecutiveMissedBlocks,proto3" json:"consecutive_missed_blocks,omitempty"`
+}
+
+func (m *OracleQuorumState) Reset()         { *m = OracleQuorumState{} }
+func (m *OracleQuorumState) String() string { return proto.CompactTextString(m) }
+func (*OracleQuorumState) ProtoMessage()    {}
+func (*OracleQuorumState) Descriptor() ([]byte, []int) {
+	return fileDescriptor_e30414b001901db3, []int{1}
+}
+func (m *OracleQuorumState) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *OracleQuorumState) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_OracleQuorumState.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *OracleQuorumState) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_OracleQuorumState.Merge(m, src)
+}
+func (m *OracleQuorumState) XXX_Size() int {
+	return m.Size()
+}
+func (m *OracleQuorumState) XXX_DiscardUnknown() {
+	xxx_messageInfo_OracleQuorumState.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_OracleQuorumState proto.InternalMessageInfo
+
+func (m *OracleQuorumState) GetOracleDenom() string {
+	if m != nil {
+		return m.OracleDenom
+	}
+	return ""
+}
+
+func (m *OracleQuorumState) GetConsecutiveMissedBlocks() uint64 {
+	if m != nil {
+		return m.ConsecutiveMissedBlocks
+	}
+	return 0
+}
+
 func init() {
 	proto.RegisterType((*GenesisState)(nil), "terra.market.v1beta1.GenesisState")
+	proto.RegisterType((*OracleQuorumState)(nil), "terra.market.v1beta1.OracleQuorumState")
 }
 
 func init() {
@@ -82,26 +183,39 @@ func init() {
 }
 
 var fileDescriptor_e30414b001901db3 = []byte{
-	// 299 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x6c, 0x90, 0x3f, 0x4e, 0xfb, 0x30,
-	0x14, 0xc7, 0xe3, 0x9f, 0x7e, 0xea, 0x10, 0x2a, 0x84, 0xaa, 0x0e, 0xa5, 0x20, 0xb7, 0x74, 0xea,
-	0x52, 0x5b, 0x05, 0x26, 0xc6, 0x28, 0x12, 0x42, 0x62, 0xa8, 0xca, 0x06, 0x43, 0xe4, 0xb8, 0x4f,
-	0x69, 0xd4, 0x84, 0x17, 0xd9, 0xa6, 0xa2, 0xb7, 0xe0, 0x16, 0x5c, 0x80, 0x43, 0x74, 0xac, 0x98,
-	0x10, 0x43, 0x85, 0x92, 0x8b, 0xa0, 0xd8, 0x61, 0xeb, 0x66, 0x3f, 0x7d, 0xde, 0xf7, 0xcf, 0xf3,
-	0x47, 0x06, 0x94, 0x12, 0x3c, 0x17, 0x6a, 0x05, 0x86, 0xaf, 0xa7, 0x31, 0x18, 0x31, 0xe5, 0x09,
-	0x3c, 0x83, 0x4e, 0x35, 0x2b, 0x14, 0x1a, 0xec, 0x74, 0x2d, 0xc3, 0x1c, 0xc3, 0x1a, 0xa6, 0x7f,
-	0x2a, 0x51, 0xe7, 0xa8, 0x23, 0xcb, 0x70, 0xf7, 0x71, 0x0b, 0xfd, 0x6e, 0x82, 0x09, 0xba, 0x79,
-	0xfd, 0x6a, 0xa6, 0x17, 0x07, 0xad, 0x1a, 0x55, 0x8b, 0x8c, 0xde, 0x89, 0xdf, 0xbe, 0x75, 0xde,
-	0x0f, 0x46, 0x18, 0xe8, 0xdc, 0xf8, 0xad, 0x42, 0x28, 0x91, 0xeb, 0x1e, 0x19, 0x92, 0xf1, 0xd1,
-	0xe5, 0x39, 0x3b, 0x94, 0x85, 0xcd, 0x2c, 0x13, 0xfc, 0xdf, 0xee, 0x07, 0xde, 0xbc, 0xd9, 0xe8,
-	0x3c, 0xf9, 0x27, 0x16, 0x8e, 0x0a, 0xc4, 0x2c, 0x5a, 0x40, 0x66, 0x44, 0xef, 0xdf, 0x90, 0x8c,
-	0xdb, 0xc1, 0xb4, 0xe6, 0xbe, 0xf7, 0x83, 0x33, 0x97, 0x5a, 0x2f, 0x56, 0x2c, 0x45, 0x9e, 0x0b,
-	0xb3, 0x64, 0xf7, 0x90, 0x08, 0xb9, 0x09, 0x41, 0x7e, 0x7e, 0x4c, 0xfc, 0xa6, 0x54, 0x08, 0x72,
-	0x7e, 0x6c, 0xa5, 0x66, 0x88, 0x59, 0x58, 0x0b, 0x05, 0x77, 0xdb, 0x92, 0x92, 0x5d, 0x49, 0xc9,
-	0x4f, 0x49, 0xc9, 0x5b, 0x45, 0xbd, 0x5d, 0x45, 0xbd, 0xaf, 0x8a, 0x7a, 0x8f, 0x3c, 0x49, 0xcd,
-	0xf2, 0x25, 0x66, 0x12, 0x73, 0x2e, 0x33, 0xa1, 0x75, 0x2a, 0x27, 0xae, 0xb9, 0x44, 0x05, 0x7c,
-	0x7d, 0xcd, 0x5f, 0xff, 0x6e, 0x60, 0x36, 0x05, 0xe8, 0xb8, 0x65, 0xbb, 0x5f, 0xfd, 0x06, 0x00,
-	0x00, 0xff, 0xff, 0x14, 0xed, 0xf6, 0xb7, 0x8b, 0x01, 0x00, 0x00,
+	// 503 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x6c, 0x92, 0xc1, 0x6e, 0xd3, 0x40,
+	0x10, 0x40, 0x63, 0x12, 0x02, 0x6c, 0xd2, 0x42, 0x57, 0x91, 0x70, 0x03, 0x72, 0xd3, 0x20, 0x44,
+	0x84, 0x54, 0x5b, 0x29, 0x9c, 0x2a, 0x2e, 0x44, 0xa9, 0x28, 0x12, 0x88, 0x60, 0x6e, 0x70, 0x58,
+	0x6d, 0xd6, 0x23, 0x7b, 0x15, 0xdb, 0x63, 0xbc, 0x9b, 0x88, 0xfe, 0x05, 0x1f, 0xc3, 0x99, 0x73,
+	0x8f, 0x15, 0x27, 0xc4, 0xa1, 0x42, 0xc9, 0x8f, 0x20, 0xef, 0x1a, 0x84, 0x20, 0xb7, 0xe4, 0xcd,
+	0x9b, 0xd9, 0xf1, 0xcc, 0x90, 0xa1, 0x86, 0xb2, 0xe4, 0x41, 0xc6, 0xcb, 0x05, 0xe8, 0x60, 0x35,
+	0x9e, 0x83, 0xe6, 0xe3, 0x20, 0x86, 0x1c, 0x94, 0x54, 0x7e, 0x51, 0xa2, 0x46, 0xda, 0x33, 0x8e,
+	0x6f, 0x1d, 0xbf, 0x76, 0xfa, 0xfb, 0x02, 0x55, 0x86, 0x8a, 0x19, 0x27, 0xb0, 0x7f, 0x6c, 0x42,
+	0xbf, 0x17, 0x63, 0x8c, 0x96, 0x57, 0xbf, 0x6a, 0x7a, 0xb8, 0xf5, 0xa9, 0xba, 0xaa, 0x51, 0x86,
+	0x5f, 0x9b, 0xa4, 0xfb, 0xc2, 0xbe, 0xfd, 0x4e, 0x73, 0x0d, 0xf4, 0x84, 0xb4, 0x0b, 0x5e, 0xf2,
+	0x4c, 0xb9, 0xce, 0xc0, 0x19, 0x75, 0x8e, 0xef, 0xfb, 0xdb, 0x7a, 0xf1, 0x67, 0xc6, 0x99, 0xb4,
+	0x2e, 0xae, 0x0e, 0x1a, 0x61, 0x9d, 0x41, 0x3f, 0x90, 0x3b, 0x46, 0x66, 0x05, 0x62, 0xca, 0x22,
+	0x48, 0x35, 0x77, 0xaf, 0x0d, 0x9c, 0x51, 0x77, 0x32, 0xae, 0xbc, 0x1f, 0x57, 0x07, 0xf7, 0x6c,
+	0xd7, 0x2a, 0x5a, 0xf8, 0x12, 0x83, 0x8c, 0xeb, 0xc4, 0x7f, 0x05, 0x31, 0x17, 0xe7, 0x53, 0x10,
+	0xdf, 0xbe, 0x1c, 0x91, 0xfa, 0xa3, 0xa6, 0x20, 0xc2, 0x5d, 0x53, 0x6a, 0x86, 0x98, 0x4e, 0xab,
+	0x42, 0xf4, 0x21, 0xd9, 0xb5, 0x3d, 0x30, 0xc8, 0xf9, 0x3c, 0x85, 0xc8, 0x6d, 0x0e, 0x9c, 0xd1,
+	0xcd, 0x70, 0xc7, 0xd2, 0x53, 0x0b, 0xe9, 0x33, 0xd2, 0x97, 0xb9, 0xd4, 0x92, 0xa7, 0x8c, 0x0b,
+	0x2d, 0x57, 0x5c, 0x4b, 0xcc, 0x59, 0x01, 0x79, 0x24, 0xf3, 0xd8, 0x6d, 0x99, 0x14, 0xb7, 0x36,
+	0x9e, 0xff, 0x11, 0x66, 0x36, 0x4e, 0x1f, 0x93, 0xbd, 0x94, 0x2b, 0xcd, 0xa0, 0x40, 0x91, 0xb0,
+	0x04, 0x64, 0x9c, 0x68, 0xf7, 0xfa, 0xc0, 0x19, 0x35, 0xc3, 0xdb, 0x55, 0xe0, 0xb4, 0xe2, 0x67,
+	0x06, 0xd3, 0x07, 0x64, 0x07, 0x4b, 0x2e, 0x52, 0x60, 0x09, 0x4f, 0x35, 0x44, 0x6e, 0xdb, 0x14,
+	0xef, 0x5a, 0x78, 0x66, 0x18, 0x65, 0xa4, 0x57, 0x4b, 0x1f, 0x97, 0x58, 0x2e, 0x33, 0xa6, 0xaa,
+	0x29, 0x2b, 0xf7, 0xc6, 0xa0, 0x39, 0xea, 0x1c, 0x3f, 0xda, 0x3e, 0xdc, 0x37, 0x26, 0xe3, 0xad,
+	0x49, 0x30, 0x5b, 0xa9, 0xe7, 0x4c, 0xf1, 0xdf, 0x80, 0x1a, 0x96, 0x64, 0xef, 0x3f, 0x9d, 0x1e,
+	0x92, 0xba, 0x0b, 0x16, 0x41, 0x8e, 0x99, 0x59, 0xe5, 0xad, 0xb0, 0x63, 0xd9, 0xb4, 0x42, 0xf4,
+	0x84, 0xec, 0x0b, 0xcc, 0x15, 0x88, 0xa5, 0x96, 0x2b, 0x60, 0x99, 0x54, 0x0a, 0x22, 0x36, 0x4f,
+	0x51, 0x2c, 0x94, 0x59, 0x5a, 0x2b, 0xbc, 0xfb, 0x97, 0xf0, 0xda, 0xc4, 0x27, 0x26, 0x3c, 0x79,
+	0x79, 0xb1, 0xf6, 0x9c, 0xcb, 0xb5, 0xe7, 0xfc, 0x5c, 0x7b, 0xce, 0xe7, 0x8d, 0xd7, 0xb8, 0xdc,
+	0x78, 0x8d, 0xef, 0x1b, 0xaf, 0xf1, 0x3e, 0x88, 0xa5, 0x4e, 0x96, 0x73, 0x5f, 0x60, 0x16, 0x88,
+	0x94, 0x2b, 0x25, 0xc5, 0x91, 0x3d, 0x42, 0x81, 0x25, 0x04, 0xab, 0xa7, 0xc1, 0xa7, 0xdf, 0xe7,
+	0xa8, 0xcf, 0x0b, 0x50, 0xf3, 0xb6, 0x39, 0xc3, 0x27, 0xbf, 0x02, 0x00, 0x00, 0xff, 0xff, 0x82,
+	0x7e, 0xd1, 0x80, 0x16, 0x03, 0x00, 0x00,
 }
 
 func (m *GenesisState) Marshal() (dAtA []byte, err error) {
@@ -124,6 +238,55 @@ func (m *GenesisState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if len(m.OracleQuorumStates) > 0 {
+		for iNdEx := len(m.OracleQuorumStates) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.OracleQuorumStates[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintGenesis(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x3a
+		}
+	}
+	if m.OracleHalted {
+		i--
+		if m.OracleHalted {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x30
+	}
+	if m.LastEpochHeight != 0 {
+		i = encodeVarintGenesis(dAtA, i, uint64(m.LastEpochHeight))
+		i--
+		dAtA[i] = 0x28
+	}
+	if m.InitialActivationPending {
+		i--
+		if m.InitialActivationPending {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x20
+	}
+	if m.MarketEnabled {
+		i--
+		if m.MarketEnabled {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x18
+	}
 	{
 		size := m.TerraPoolDelta.Size()
 		i -= size
@@ -144,6 +307,41 @@ func (m *GenesisState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	}
 	i--
 	dAtA[i] = 0xa
+	return len(dAtA) - i, nil
+}
+
+func (m *OracleQuorumState) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *OracleQuorumState) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *OracleQuorumState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.ConsecutiveMissedBlocks != 0 {
+		i = encodeVarintGenesis(dAtA, i, uint64(m.ConsecutiveMissedBlocks))
+		i--
+		dAtA[i] = 0x10
+	}
+	if len(m.OracleDenom) > 0 {
+		i -= len(m.OracleDenom)
+		copy(dAtA[i:], m.OracleDenom)
+		i = encodeVarintGenesis(dAtA, i, uint64(len(m.OracleDenom)))
+		i--
+		dAtA[i] = 0xa
+	}
 	return len(dAtA) - i, nil
 }
 
@@ -168,6 +366,40 @@ func (m *GenesisState) Size() (n int) {
 	n += 1 + l + sovGenesis(uint64(l))
 	l = m.TerraPoolDelta.Size()
 	n += 1 + l + sovGenesis(uint64(l))
+	if m.MarketEnabled {
+		n += 2
+	}
+	if m.InitialActivationPending {
+		n += 2
+	}
+	if m.LastEpochHeight != 0 {
+		n += 1 + sovGenesis(uint64(m.LastEpochHeight))
+	}
+	if m.OracleHalted {
+		n += 2
+	}
+	if len(m.OracleQuorumStates) > 0 {
+		for _, e := range m.OracleQuorumStates {
+			l = e.Size()
+			n += 1 + l + sovGenesis(uint64(l))
+		}
+	}
+	return n
+}
+
+func (m *OracleQuorumState) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.OracleDenom)
+	if l > 0 {
+		n += 1 + l + sovGenesis(uint64(l))
+	}
+	if m.ConsecutiveMissedBlocks != 0 {
+		n += 1 + sovGenesis(uint64(m.ConsecutiveMissedBlocks))
+	}
 	return n
 }
 
@@ -272,6 +504,220 @@ func (m *GenesisState) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MarketEnabled", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenesis
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.MarketEnabled = bool(v != 0)
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field InitialActivationPending", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenesis
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.InitialActivationPending = bool(v != 0)
+		case 5:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LastEpochHeight", wireType)
+			}
+			m.LastEpochHeight = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenesis
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.LastEpochHeight |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field OracleHalted", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenesis
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.OracleHalted = bool(v != 0)
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field OracleQuorumStates", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenesis
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthGenesis
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthGenesis
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.OracleQuorumStates = append(m.OracleQuorumStates, OracleQuorumState{})
+			if err := m.OracleQuorumStates[len(m.OracleQuorumStates)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipGenesis(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthGenesis
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *OracleQuorumState) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowGenesis
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: OracleQuorumState: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: OracleQuorumState: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field OracleDenom", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenesis
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthGenesis
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthGenesis
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.OracleDenom = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ConsecutiveMissedBlocks", wireType)
+			}
+			m.ConsecutiveMissedBlocks = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGenesis
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ConsecutiveMissedBlocks |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipGenesis(dAtA[iNdEx:])

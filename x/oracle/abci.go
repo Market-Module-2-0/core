@@ -1,6 +1,7 @@
 package oracle
 
 import (
+	"sort"
 	"time"
 
 	"cosmossdk.io/math"
@@ -70,6 +71,7 @@ func EndBlocker(ctx sdk.Context, k keeper.Keeper) {
 		// NOTE: **Filter out inactive or jailed validators**
 		// NOTE: **Make abstain votes to have zero vote power**
 		voteMap := k.OrganizeBallotByDenom(ctx, validatorClaimMap)
+		votePowers := collectDenomVotePowers(voteTargets, voteMap, validatorClaimMap)
 
 		if referenceTerra := PickReferenceTerra(ctx, k, voteTargets, voteMap); referenceTerra != "" {
 			// make voteMap of Reference Terra to calculate cross exchange rates
@@ -128,7 +130,7 @@ func EndBlocker(ctx sdk.Context, k keeper.Keeper) {
 
 		// Notify market module that oracle tally occurred
 		if k.MarketHooks != nil {
-			k.MarketHooks.AfterOracleTally(ctx)
+			k.MarketHooks.AfterOracleTally(ctx, params.VotePeriod, votePowers)
 		}
 	}
 
@@ -137,4 +139,34 @@ func EndBlocker(ctx sdk.Context, k keeper.Keeper) {
 	if core.IsPeriodLastBlock(ctx, params.SlashWindow) {
 		k.SlashAndResetMissCounters(ctx)
 	}
+}
+
+// collectDenomVotePowers takes its snapshot before PickReferenceTerra mutates
+// voteTargets and voteMap. Missing and abstain votes therefore remain visible
+// as zero power, including for targets that fail the native Oracle threshold.
+func collectDenomVotePowers(
+	voteTargets map[string]math.LegacyDec,
+	voteMap map[string]types.ExchangeRateBallot,
+	validatorClaimMap map[string]types.Claim,
+) []types.DenomVotePower {
+	totalPower := int64(0)
+	for _, claim := range validatorClaimMap {
+		totalPower += claim.Power
+	}
+
+	denoms := make([]string, 0, len(voteTargets))
+	for denom := range voteTargets {
+		denoms = append(denoms, denom)
+	}
+	sort.Strings(denoms)
+
+	result := make([]types.DenomVotePower, 0, len(denoms))
+	for _, denom := range denoms {
+		result = append(result, types.DenomVotePower{
+			Denom:      denom,
+			VotePower:  voteMap[denom].Power(),
+			TotalPower: totalPower,
+		})
+	}
+	return result
 }

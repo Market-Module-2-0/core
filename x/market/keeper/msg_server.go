@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"cosmossdk.io/math"
-	core "github.com/classic-terra/core/v4/types"
 	"github.com/classic-terra/core/v4/x/market/types"
 	oracletypes "github.com/classic-terra/core/v4/x/oracle/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -62,14 +61,19 @@ func (k msgServer) handleSwapRequest(ctx sdk.Context,
 	trader sdk.AccAddress, receiver sdk.AccAddress,
 	offerCoin sdk.Coin, askDenom string,
 ) (*types.MsgSwapResponse, error) {
-	// Only allow swaps between uluna and denoms in the allowed set (spread-fee path only)
-	if !((offerCoin.Denom == core.MicroLunaDenom && k.isAllowedSwapDenom(askDenom)) ||
-		(askDenom == core.MicroLunaDenom && k.isAllowedSwapDenom(offerCoin.Denom))) {
+	if !k.IsMarketEnabled(ctx) {
+		return nil, types.ErrMarketDisabled
+	}
+
+	// Only allow LUNC pairs declared in the shared market-asset registry.
+	asset, allowed := k.marketAssetForPair(offerCoin.Denom, askDenom)
+	if !allowed {
 		return nil, types.ErrInvalidSwapPair
 	}
 
-	// Oracle guard: require Luna/USD meta rate to be present
-	if _, err := k.OracleKeeper.GetLunaExchangeRate(ctx, oracletypes.MetaUSDDenom); err != nil {
+	// Every asset defines its own Oracle inputs. This keeps pair validation
+	// independent from a particular feeder or hard-coded USTC condition.
+	if err := k.validateMarketAssetOracle(ctx, asset); err != nil {
 		return nil, types.ErrNoEffectivePrice
 	}
 
@@ -97,47 +101,34 @@ func (k msgServer) handleSwapRequest(ctx sdk.Context,
 	// from its recent average.
 	maxDeviation := k.MaxTwapDeviation(ctx)
 
-	// Helper function to check the rate guarding a swap leg against its TWAP
-	checkTWAPDeviation := func(denom string) error {
-		// USTC is priced by the UST meta rate (real USD per USTC). The legacy uusd
-		// rate is a LUNC price recorded under the broken 1 USTC = 1 USD assumption,
-		// so it is not a USTC exchange rate and is deliberately not the guard input
-		// here - correcting that assumption is what the meta rate exists for.
-		// Every other denom carries the LUNC price in that currency directly.
-		twapDenom := denom
-		if denom == core.MicroUSDDenom {
-			twapDenom = oracletypes.MetaUSDDenom
+	// Check a concrete Oracle input. The registry supplies the required inputs
+	// for this pair, including USD/LUNC for direct-USD market assets.
+	checkTWAPDeviation := func(oracleDenom string) error {
+		currentPrice, err := k.OracleKeeper.GetLunaExchangeRate(ctx, oracleDenom)
+		if err != nil || !currentPrice.IsPositive() {
+			return types.ErrNoEffectivePrice
 		}
 
-		currentPrice, err := k.OracleKeeper.GetLunaExchangeRate(ctx, twapDenom)
-		if err == nil && currentPrice.IsPositive() {
-			twapPrice, twapErr := k.ComputeTWAP(ctx, twapDenom)
-			if twapErr == nil && twapPrice.IsPositive() {
-				// Calculate deviation
-				var deviation math.LegacyDec
-				if currentPrice.GT(twapPrice) {
-					deviation = currentPrice.Sub(twapPrice).Quo(twapPrice)
-				} else {
-					deviation = twapPrice.Sub(currentPrice).Quo(twapPrice)
-				}
+		twapPrice, err := k.ComputeTWAP(ctx, oracleDenom)
+		if err != nil || !twapPrice.IsPositive() {
+			return types.ErrTWAPNotReady
+		}
 
-				if deviation.GT(maxDeviation) {
-					return types.ErrTWAPDeviation
-				}
-			}
-			// If no TWAP data yet, allow the swap (bootstrapping phase)
+		var deviation math.LegacyDec
+		if currentPrice.GT(twapPrice) {
+			deviation = currentPrice.Sub(twapPrice).Quo(twapPrice)
+		} else {
+			deviation = twapPrice.Sub(currentPrice).Quo(twapPrice)
+		}
+
+		if deviation.GT(maxDeviation) {
+			return types.ErrTWAPDeviation
 		}
 		return nil
 	}
 
-	// One side of an allowed pair is always uluna, which is the oracle base and has no
-	// rate of its own, so guard the rate of every other leg. ValidateBasic rejects
-	// offer == ask, so no leg is checked twice.
-	for _, denom := range []string{offerCoin.Denom, askDenom} {
-		if denom == core.MicroLunaDenom {
-			continue
-		}
-		if err := checkTWAPDeviation(denom); err != nil {
+	for _, oracleDenom := range k.oracleDenomsForAsset(asset) {
+		if err := checkTWAPDeviation(oracleDenom); err != nil {
 			return nil, err
 		}
 	}
@@ -153,22 +144,10 @@ func (k msgServer) handleSwapRequest(ctx sdk.Context,
 	// Subtract fee from the swap coin
 	swapDecCoin.Amount = swapDecCoin.Amount.Sub(feeDecCoin.Amount)
 
-	// Update pool delta
-	if err := k.ApplySwapToPool(ctx, offerCoin, swapDecCoin); err != nil {
-		return nil, err
-	}
-
-	// Send offer coins to module account
-	offerCoins := sdk.NewCoins(offerCoin)
-	err = k.BankKeeper.SendCoinsFromAccountToModule(ctx, trader, types.ModuleName, offerCoins)
-	if err != nil {
-		return nil, err
-	}
-
-	// Determine amounts to transfer out of the pool
+	// Determine and validate the actual payout before mutating any state. A
+	// governance-set 100% minimum spread intentionally produces a zero payout
+	// and therefore acts as the historical Market swap brake.
 	swapCoin, decimalCoin := swapDecCoin.TruncateDecimal()
-
-	// Ensure to fail the swap tx when zero swap coin
 	if !swapCoin.IsPositive() {
 		return nil, types.ErrZeroSwapCoin
 	}
@@ -183,11 +162,25 @@ func (k msgServer) handleSwapRequest(ctx sdk.Context,
 		return nil, types.ErrInsufficientLiquidity
 	}
 
-	// Daily cap check: ensure pool balance deviation from baseline doesn't exceed daily limit.
-	// Check AFTER coins are in the pool but BEFORE sending out, and account for the gross
-	// drain (receiver payout + fee): the fee is carved out of the payout, so the trader pays
-	// no extra, but it still leaves the pool towards burn / community pool / oracle.
-	if err := k.CheckAndUpdateDailyCapForSwap(ctx, offerCoin, sdk.NewCoin(swapCoin.Denom, requiredOut)); err != nil {
+	// Update pool delta
+	if err := k.ApplySwapToPool(ctx, offerCoin, swapDecCoin); err != nil {
+		return nil, err
+	}
+
+	// Send offer coins to module account
+	offerCoins := sdk.NewCoins(offerCoin)
+	err = k.BankKeeper.SendCoinsFromAccountToModule(ctx, trader, types.ModuleName, offerCoins)
+	if err != nil {
+		return nil, err
+	}
+
+	// The direct cap is the hard safety layer of the adaptive model. Count the
+	// complete pool drain: both the trader payout and the fee leave Market.
+	if err := k.CheckAndUpdateDailyCapForSwap(
+		ctx,
+		offerCoin,
+		sdk.NewCoin(swapCoin.Denom, requiredOut),
+	); err != nil {
 		return nil, err
 	}
 

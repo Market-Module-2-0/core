@@ -36,8 +36,9 @@ func (s *WasmTestSuite) Swap(contractPath string, executeFunc func(contract sdk.
 	s.App.OracleKeeper.SetLunaExchangeRate(s.Ctx, oracletypes.MetaUSDDenom, sdkmath.LegacyOneDec())
 	// Provide a basic Luna->USTC rate as well
 	s.App.OracleKeeper.SetLunaExchangeRate(s.Ctx, core.MicroUSDDenom, sdkmath.LegacyOneDec())
-	// Allow SDR swaps for tests (production default allows only USD)
-	s.App.MarketKeeper.SetAllowedSwapDenoms([]string{core.MicroUSDDenom, core.MicroSDRDenom})
+	s.seedCompleteTWAP(map[string]sdkmath.LegacyDec{
+		core.MicroSDRDenom: lunaPriceInSDR,
+	})
 	// Prefund accumulator with usdr liquidity and process epoch to move to market pool
 	s.FundAcc(actor, sdk.NewCoins(sdk.NewInt64Coin(core.MicroSDRDenom, 1_000_000)))
 	s.Require().NoError(
@@ -105,8 +106,9 @@ func (s *WasmTestSuite) SwapSend(contractPath string, executeFunc func(contract 
 	s.App.OracleKeeper.SetLunaExchangeRate(s.Ctx, oracletypes.MetaUSDDenom, sdkmath.LegacyOneDec())
 	// Provide a basic Luna->USTC rate as well
 	s.App.OracleKeeper.SetLunaExchangeRate(s.Ctx, core.MicroUSDDenom, sdkmath.LegacyOneDec())
-	// Allow SDR swaps for tests (production default allows only USD)
-	s.App.MarketKeeper.SetAllowedSwapDenoms([]string{core.MicroUSDDenom, core.MicroSDRDenom})
+	s.seedCompleteTWAP(map[string]sdkmath.LegacyDec{
+		core.MicroSDRDenom: lunaPriceInSDR,
+	})
 	// Prefund accumulator with usdr liquidity and process epoch to move to market pool
 	s.FundAcc(actor, sdk.NewCoins(sdk.NewInt64Coin(core.MicroSDRDenom, 1_000_000)))
 	s.Require().NoError(

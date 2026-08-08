@@ -37,10 +37,10 @@ var (
 var (
 	DefaultBasePool           = math.LegacyNewDec(1000000 * core.MicroUnit) // 1000,000sdr = 1000,000,000,000usdr
 	DefaultPoolRecoveryPeriod = core.BlocksPerDay                           // 14,400
-	DefaultMinStabilitySpread = math.LegacyNewDecWithPrec(2, 2)             // 2%
+	DefaultMinStabilitySpread = math.LegacyMustNewDecFromStr("0.0035")      // 0.35%
 	DefaultEpochLengthBlocks  = 30 * core.BlocksPerDay                      // 30 days worth of blocks
-	// Default fee distribution: 0% burn, 0% community pool, 100% to oracle (remainder)
-	DefaultSwapFeeBurnRate      = math.LegacyZeroDec()
+	// Default fee distribution: 50% burn, 0% community pool, 50% to oracle (remainder)
+	DefaultSwapFeeBurnRate      = math.LegacyNewDecWithPrec(5, 1)
 	DefaultSwapFeeCommunityRate = math.LegacyZeroDec()
 	// Default oracle freshness: 75 seconds (25 blocks * 3s)
 	DefaultMaxOracleAgeSeconds = uint64(75)
@@ -50,6 +50,7 @@ var (
 	DefaultMaxTWAPDeviation = math.LegacyNewDecWithPrec(10, 2) // 0.10
 	// Default daily cap: 10% of pool balance per day
 	DefaultDailyCapFactor = math.LegacyNewDecWithPrec(10, 2) // 0.10
+	MaximumDailyCapFactor = math.LegacyNewDecWithPrec(10, 2) // hard safety ceiling
 )
 
 var _ paramstypes.ParamSet = &Params{}
@@ -94,7 +95,7 @@ func (p *Params) ParamSetPairs() paramstypes.ParamSetPairs {
 		paramstypes.NewParamSetPair(KeyMaxOracleAgeSeconds, &p.MaxOracleAgeSeconds, validateMaxOracleAgeSeconds),
 		paramstypes.NewParamSetPair(KeyTWAPLookbackWindow, &p.TwapLookbackWindow, validateTWAPLookbackWindow),
 		paramstypes.NewParamSetPair(KeyMaxTWAPDeviation, &p.MaxTwapDeviation, validateFraction),
-		paramstypes.NewParamSetPair(KeyDailyCapFactor, &p.DailyCapFactor, validateFraction),
+		paramstypes.NewParamSetPair(KeyDailyCapFactor, &p.DailyCapFactor, validateDailyCapFactor),
 	}
 }
 
@@ -133,7 +134,7 @@ func (p Params) Validate() error {
 	if err := validateFraction(p.MaxTwapDeviation); err != nil {
 		return fmt.Errorf("max TWAP deviation invalid: %w", err)
 	}
-	if err := validateFraction(p.DailyCapFactor); err != nil {
+	if err := validateDailyCapFactor(p.DailyCapFactor); err != nil {
 		return fmt.Errorf("daily cap factor invalid: %w", err)
 	}
 
@@ -207,6 +208,19 @@ func validateFraction(i interface{}) error {
 	if v.GT(math.LegacyOneDec()) {
 		return fmt.Errorf("fraction must be <= 1: %s", v)
 	}
+	return nil
+}
+
+func validateDailyCapFactor(i interface{}) error {
+	if err := validateFraction(i); err != nil {
+		return err
+	}
+
+	v := i.(math.LegacyDec)
+	if v.GT(MaximumDailyCapFactor) {
+		return fmt.Errorf("daily cap factor must be <= %s: %s", MaximumDailyCapFactor, v)
+	}
+
 	return nil
 }
 

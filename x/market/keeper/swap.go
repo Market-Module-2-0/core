@@ -5,7 +5,6 @@ import (
 	"cosmossdk.io/math"
 	core "github.com/classic-terra/core/v4/types"
 	"github.com/classic-terra/core/v4/x/market/types"
-	oracletypes "github.com/classic-terra/core/v4/x/oracle/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 )
@@ -139,29 +138,14 @@ func (k Keeper) ComputeInternalSwap(ctx sdk.Context, offerCoin sdk.DecCoin, askD
 		return offerCoin, nil
 	}
 
-	offerRate, err := k.OracleKeeper.GetLunaExchangeRate(ctx, offerCoin.Denom)
+	offerRate, err := k.marketExchangeRate(ctx, offerCoin.Denom)
 	if err != nil {
 		return sdk.DecCoin{}, errorsmod.Wrap(types.ErrNoEffectivePrice, offerCoin.Denom)
 	}
 
-	askRate, err := k.OracleKeeper.GetLunaExchangeRate(ctx, askDenom)
+	askRate, err := k.marketExchangeRate(ctx, askDenom)
 	if err != nil {
 		return sdk.DecCoin{}, errorsmod.Wrap(types.ErrNoEffectivePrice, askDenom)
-	}
-
-	// Adjust uusd rates to true USTC units using oracle meta-denom (USD per 1 USTC).
-	// Legacy oracle stores uusd per 1 LUNA numerically as USD/Luna; we convert to USTC/Luna by dividing by USD/USTC.
-	if offerCoin.Denom == core.MicroUSDDenom || askDenom == core.MicroUSDDenom {
-		usdPerUSTC, errMeta := k.OracleKeeper.GetLunaExchangeRate(ctx, oracletypes.MetaUSDDenom)
-		if errMeta != nil || !usdPerUSTC.IsPositive() {
-			return sdk.DecCoin{}, errorsmod.Wrap(types.ErrNoEffectivePrice, core.MicroUSDDenom)
-		}
-		if offerCoin.Denom == core.MicroUSDDenom {
-			offerRate = offerRate.Quo(usdPerUSTC)
-		}
-		if askDenom == core.MicroUSDDenom {
-			askRate = askRate.Quo(usdPerUSTC)
-		}
 	}
 
 	retAmount := offerCoin.Amount.Mul(askRate).Quo(offerRate)

@@ -93,6 +93,10 @@ func (a treasuryAccountAdapter) GetModuleAccount(ctx context.Context, moduleName
 	return a.ak.GetModuleAccount(ctx, moduleName)
 }
 
+func (a treasuryAccountAdapter) SetModuleAccount(ctx context.Context, moduleAccount sdk.ModuleAccountI) {
+	a.ak.SetModuleAccount(ctx, moduleAccount)
+}
+
 func (a treasuryAccountAdapter) GetAccount(ctx context.Context, addr sdk.AccAddress) sdk.AccountI {
 	return a.ak.GetAccount(ctx, addr)
 }

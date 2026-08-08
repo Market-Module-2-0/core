@@ -24,6 +24,11 @@ func setup(t *testing.T) (keeper.TestInput, types.MsgServer) {
 	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, core.MicroKRWDenom, randomPrice)
 	// Set required meta USD rate for oracle guard in market swaps
 	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, oracletypes.MetaUSDDenom, randomPrice)
+	lookback := int64(input.MarketKeeper.TwapLookbackWindow(input.Ctx))
+	input.Ctx = input.Ctx.WithBlockHeight(lookback)
+	input.MarketKeeper.AddTWAPPrice(
+		input.Ctx.WithBlockHeight(0), core.MicroSDRDenom, randomPrice,
+	)
 
 	// Seed market module pool with liquidity for ask denoms used in tests.
 	// Use the faucet (which holds the Minter permission) rather than minting into

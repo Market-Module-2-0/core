@@ -8,6 +8,7 @@ import (
 	storetypes "cosmossdk.io/store/types"
 	core "github.com/classic-terra/core/v4/types"
 	"github.com/classic-terra/core/v4/x/market/types"
+	oracletypes "github.com/classic-terra/core/v4/x/oracle/types"
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	paramstypes "github.com/cosmos/cosmos-sdk/x/params/types"
@@ -24,9 +25,10 @@ type Keeper struct {
 	OracleKeeper  types.OracleKeeper
 	DistrKeeper   types.DistributionKeeper
 
-	// allowedSwapDenoms contains denoms that are allowed to be swapped with uluna
-	// This is kept in-memory (not a chain param) so tests can differ from live defaults.
-	allowedSwapDenoms map[string]bool
+	// marketAssets is a deterministic consensus registry. The map is lookup-only;
+	// consensus iteration always uses the sorted slice.
+	marketAssets        []MarketAssetConfig
+	marketAssetsByDenom map[string]MarketAssetConfig
 }
 
 // NewKeeper constructs a new keeper for oracle
@@ -49,43 +51,22 @@ func NewKeeper(
 		paramstore = paramstore.WithKeyTable(types.ParamKeyTable())
 	}
 
-	// default allowed swap denoms: only USD for production, but we might need others for tests
-	allowed := map[string]bool{
-		core.MicroUSDDenom: true,
+	keeper := Keeper{
+		cdc:           cdc,
+		storeKey:      storeKey,
+		paramSpace:    paramstore,
+		AccountKeeper: accountKeeper,
+		BankKeeper:    bankKeeper,
+		OracleKeeper:  oracleKeeper,
+		DistrKeeper:   distrKeeper,
 	}
-
-	return Keeper{
-		cdc:               cdc,
-		storeKey:          storeKey,
-		paramSpace:        paramstore,
-		AccountKeeper:     accountKeeper,
-		BankKeeper:        bankKeeper,
-		OracleKeeper:      oracleKeeper,
-		DistrKeeper:       distrKeeper,
-		allowedSwapDenoms: allowed,
-	}
+	keeper.SetMarketAssets(defaultMarketAssets())
+	return keeper
 }
 
 // Logger returns a module-specific logger.
 func (k Keeper) Logger(ctx sdk.Context) log.Logger {
 	return ctx.Logger().With("module", fmt.Sprintf("x/%s", types.ModuleName))
-}
-
-// SetAllowedSwapDenoms sets which denoms are allowed to be swapped with uluna.
-// Note: This is intended for configuration/tests; it is not persisted.
-// It must be called before the Keeper is handed to the AppModules, which capture it
-// by value: replacing the map afterwards (e.g. from an upgrade handler) is not seen
-// by the msg server or EndBlocker. For production, change the default in NewKeeper.
-func (k *Keeper) SetAllowedSwapDenoms(denoms []string) {
-	m := make(map[string]bool, len(denoms))
-	for _, d := range denoms {
-		m[d] = true
-	}
-	k.allowedSwapDenoms = m
-}
-
-func (k Keeper) isAllowedSwapDenom(denom string) bool {
-	return k.allowedSwapDenoms[denom]
 }
 
 // GetTerraPoolDelta returns the gap between the TerraPool and the TerraBasePool
@@ -124,7 +105,7 @@ func (k Keeper) ReplenishPools(ctx sdk.Context) {
 
 // -------- Epoch processing (burn + refill) --------
 
-func (k Keeper) getLastEpochHeight(ctx sdk.Context) int64 {
+func (k Keeper) GetLastEpochHeight(ctx sdk.Context) int64 {
 	store := ctx.KVStore(k.storeKey)
 	bz := store.Get(types.EpochLastHeightKey)
 	if bz == nil {
@@ -133,7 +114,7 @@ func (k Keeper) getLastEpochHeight(ctx sdk.Context) int64 {
 	return int64(sdk.BigEndianToUint64(bz))
 }
 
-func (k Keeper) setLastEpochHeight(ctx sdk.Context, h int64) {
+func (k Keeper) SetLastEpochHeight(ctx sdk.Context, h int64) {
 	store := ctx.KVStore(k.storeKey)
 	bz := sdk.Uint64ToBigEndian(uint64(h))
 	store.Set(types.EpochLastHeightKey, bz)
@@ -142,24 +123,39 @@ func (k Keeper) setLastEpochHeight(ctx sdk.Context, h int64) {
 // ProcessEpochIfDue burns leftover pool balances and refills from the accumulator module account
 // when an epoch boundary is reached.
 func (k Keeper) ProcessEpochIfDue(ctx sdk.Context) {
-	last := k.getLastEpochHeight(ctx)
+	last := k.GetLastEpochHeight(ctx)
 	now := ctx.BlockHeight()
 	epochLen := k.EpochLengthBlocks(ctx)
 	if last != 0 && uint64(now-last) < epochLen {
 		return
 	}
+	// Do not consume the first activation boundary while Oracle quorum is
+	// halted. Keeping the original epoch anchor lets the same completed
+	// collection epoch be processed as soon as quorum recovers.
+	if k.IsInitialActivationPending(ctx) && k.IsOracleHalted(ctx) {
+		return
+	}
 
 	marketAddr := k.AccountKeeper.GetModuleAddress(types.ModuleName)
 	accumAddr := k.AccountKeeper.GetModuleAddress(types.AccumulatorModuleName)
+	balances := k.BankKeeper.SpendableCoins(ctx, marketAddr)
+	accumBalances := k.BankKeeper.SpendableCoins(ctx, accumAddr)
+
+	// Calculate the next virtual-pool settings before mutating balances. If the
+	// required oracle input is unavailable, leave the entire epoch untouched and
+	// retry on the next block.
+	adaptive, err := k.prepareAdaptiveLiquidityParams(ctx, balances, accumBalances)
+	if err != nil {
+		k.Logger(ctx).Error("market adaptive liquidity calculation failed", "err", err)
+		return
+	}
 
 	// Burn all balances held by the market module account
-	balances := k.BankKeeper.SpendableCoins(ctx, marketAddr)
 	if !balances.Empty() {
 		if err := k.BankKeeper.BurnCoins(ctx, types.ModuleName, balances); err != nil {
-			// log and continue; do not panic to avoid halting the chain
 			k.Logger(ctx).Error("market epoch burn failed", "err", err)
+			return
 		}
-		// Emit burn event
 		ctx.EventManager().EmitEvent(
 			sdk.NewEvent(
 				types.EventEpochBurn,
@@ -172,12 +168,11 @@ func (k Keeper) ProcessEpochIfDue(ctx sdk.Context) {
 	}
 
 	// Move all funds from accumulator to market module account
-	accumBalances := k.BankKeeper.SpendableCoins(ctx, accumAddr)
 	if !accumBalances.Empty() {
 		if err := k.BankKeeper.SendCoinsFromModuleToModule(ctx, types.AccumulatorModuleName, types.ModuleName, accumBalances); err != nil {
 			k.Logger(ctx).Error("market epoch refill failed", "err", err)
+			return
 		}
-		// Emit refill event
 		ctx.EventManager().EmitEvent(
 			sdk.NewEvent(
 				types.EventEpochRefill,
@@ -190,12 +185,11 @@ func (k Keeper) ProcessEpochIfDue(ctx sdk.Context) {
 		)
 	}
 
-	k.setLastEpochHeight(ctx, now)
+	k.applyAdaptiveLiquidityParams(ctx, adaptive)
+	k.SetLastEpochHeight(ctx, now)
 
-	// Drop the previous epoch's baselines and usage counters. Baselines for denoms
-	// that are no longer in the pool must not linger, or they would keep sizing a
-	// cap for a denom the pool no longer holds, and carried-over usage would eat
-	// into the first day of the new epoch.
+	// Baselines and usage belong to the old physical pool and must not leak into
+	// the new epoch.
 	k.clearDailyCapBaselines(ctx)
 	k.ClearDailyCapUsage(ctx)
 
@@ -208,6 +202,8 @@ func (k Keeper) ProcessEpochIfDue(ctx sdk.Context) {
 
 	// Initialize daily cap tracking for the new epoch
 	k.SetDailyCapResetHeight(ctx, now)
+
+	k.activateAfterInitialEpoch(ctx)
 }
 
 // -------- Oracle tally tracking --------
@@ -252,22 +248,47 @@ func (k Keeper) GetTWAPPrices(ctx sdk.Context, denom string) []types.PriceSnapsh
 	return wrapped.Snapshots
 }
 
-// AddTWAPPrice adds a new price snapshot and prunes old ones
+// AddTWAPPrice adds a new price snapshot and prunes old ones. Pruning always
+// retains the latest observation at or before the lookback boundary because it
+// defines the price in effect at the beginning of the TWAP interval.
 func (k Keeper) AddTWAPPrice(ctx sdk.Context, denom string, price math.LegacyDec) {
+	if !price.IsPositive() {
+		return
+	}
+
 	snapshots := k.GetTWAPPrices(ctx, denom)
 	currentHeight := ctx.BlockHeight()
-	lookback := int64(k.TwapLookbackWindow(ctx))
+	lookback := k.TwapLookbackWindow(ctx)
 
-	// Add new snapshot
-	snapshots = append(snapshots, types.PriceSnapshot{Height: currentHeight, Price: price})
+	// A tally can only occur once at a given height. Replacing a duplicate keeps
+	// the stored step function canonical if this method is called twice in tests
+	// or application wiring.
+	if len(snapshots) > 0 && snapshots[len(snapshots)-1].Height == currentHeight {
+		snapshots[len(snapshots)-1].Price = price
+	} else {
+		if len(snapshots) > 0 && snapshots[len(snapshots)-1].Height > currentHeight {
+			return
+		}
+		snapshots = append(snapshots, types.PriceSnapshot{Height: currentHeight, Price: price})
+	}
 
-	// Prune old snapshots (keep only those within lookback window)
-	pruned := make([]types.PriceSnapshot, 0, len(snapshots))
-	for _, snap := range snapshots {
-		if currentHeight-snap.Height <= lookback {
-			pruned = append(pruned, snap)
+	pruneFrom := 0
+	const maxInt64AsUint = uint64(1<<63 - 1)
+	if lookback <= maxInt64AsUint {
+		windowStart := currentHeight - int64(lookback)
+		predecessor := -1
+		for i, snap := range snapshots {
+			if snap.Height <= windowStart {
+				predecessor = i
+				continue
+			}
+			break
+		}
+		if predecessor >= 0 {
+			pruneFrom = predecessor
 		}
 	}
+	pruned := snapshots[pruneFrom:]
 
 	// Encode and store as a single introspectable protobuf message.
 	store := ctx.KVStore(k.storeKey)
@@ -279,19 +300,64 @@ func (k Keeper) AddTWAPPrice(ctx sdk.Context, denom string, price math.LegacyDec
 	store.Set(types.GetTWAPPriceKey(denom), bz)
 }
 
-// ComputeTWAP calculates the time-weighted average price from snapshots
+// ComputeTWAP calculates the price weighted by the exact number of blocks for
+// which each observation was effective over [currentHeight-lookback,
+// currentHeight). A snapshot at or before the interval start is mandatory;
+// otherwise the window is incomplete and swaps must remain closed.
 func (k Keeper) ComputeTWAP(ctx sdk.Context, denom string) (math.LegacyDec, error) {
 	snapshots := k.GetTWAPPrices(ctx, denom)
 	if len(snapshots) == 0 {
-		return math.LegacyZeroDec(), fmt.Errorf("no TWAP data for %s", denom)
+		return math.LegacyZeroDec(), fmt.Errorf("%w for %s", types.ErrTWAPNotReady, denom)
 	}
 
-	// Simple average for now (could be improved to true time-weighted)
-	sum := math.LegacyZeroDec()
-	for _, snap := range snapshots {
-		sum = sum.Add(snap.Price)
+	lookback := k.TwapLookbackWindow(ctx)
+	const maxInt64AsUint = uint64(1<<63 - 1)
+	if lookback == 0 || lookback > maxInt64AsUint {
+		return math.LegacyZeroDec(), fmt.Errorf("%w for %s: invalid window %d", types.ErrTWAPNotReady, denom, lookback)
 	}
-	return sum.QuoInt64(int64(len(snapshots))), nil
+
+	windowStart := ctx.BlockHeight() - int64(lookback)
+	activeIndex := -1
+	for i, snap := range snapshots {
+		if snap.Height <= windowStart {
+			activeIndex = i
+			continue
+		}
+		break
+	}
+	if activeIndex < 0 || !snapshots[activeIndex].Price.IsPositive() {
+		return math.LegacyZeroDec(), fmt.Errorf(
+			"%w for %s: history does not cover height %d",
+			types.ErrTWAPNotReady,
+			denom,
+			windowStart,
+		)
+	}
+
+	weightedSum := math.LegacyZeroDec()
+	activePrice := snapshots[activeIndex].Price
+	cursor := windowStart
+	currentHeight := ctx.BlockHeight()
+	for _, snap := range snapshots[activeIndex+1:] {
+		if snap.Height >= currentHeight {
+			break
+		}
+		if snap.Height <= cursor {
+			activePrice = snap.Price
+			continue
+		}
+		if !activePrice.IsPositive() || !snap.Price.IsPositive() {
+			return math.LegacyZeroDec(), fmt.Errorf("%w for %s: non-positive observation", types.ErrTWAPNotReady, denom)
+		}
+		weightedSum = weightedSum.Add(activePrice.MulInt64(snap.Height - cursor))
+		cursor = snap.Height
+		activePrice = snap.Price
+	}
+	if cursor < currentHeight {
+		weightedSum = weightedSum.Add(activePrice.MulInt64(currentHeight - cursor))
+	}
+
+	return weightedSum.QuoInt64(int64(lookback)), nil
 }
 
 // -------- Daily cap tracking --------
@@ -351,17 +417,15 @@ func (k Keeper) SetDailyCapUsage(ctx sdk.Context, denom string, amount math.Int)
 	store.Set(types.GetDailyCapUsageKey(denom), bz)
 }
 
-// deleteByPrefix removes every entry under the given store prefix. Keys are
-// collected before deleting: mutating the store while an iterator over the same
-// range is open is not defined behaviour.
+// deleteByPrefix removes every entry under a store prefix. Keys are collected
+// before deletion because mutating the store during iteration is undefined.
 func (k Keeper) deleteByPrefix(ctx sdk.Context, prefix []byte) {
 	store := ctx.KVStore(k.storeKey)
+	iterator := storetypes.KVStorePrefixIterator(store, prefix)
 
 	var keys [][]byte
-	iterator := storetypes.KVStorePrefixIterator(store, prefix)
 	for ; iterator.Valid(); iterator.Next() {
-		key := make([]byte, len(iterator.Key()))
-		copy(key, iterator.Key())
+		key := append([]byte(nil), iterator.Key()...)
 		keys = append(keys, key)
 	}
 	iterator.Close()
@@ -371,7 +435,7 @@ func (k Keeper) deleteByPrefix(ctx sdk.Context, prefix []byte) {
 	}
 }
 
-// ClearDailyCapUsage removes all per-denom daily usage counters
+// ClearDailyCapUsage removes all per-denom daily usage counters.
 func (k Keeper) ClearDailyCapUsage(ctx sdk.Context) {
 	k.deleteByPrefix(ctx, types.DailyCapUsageKey)
 }
@@ -393,28 +457,26 @@ func (k Keeper) ResetDailyCapIfNeeded(ctx sdk.Context) {
 	}
 }
 
-// AfterOracleTally is called by the oracle module after a tally completes
-// This updates the last tally timestamp and TWAP prices for all denoms.
-// We iterate over the oracle's active exchange rates rather than a hardcoded
-// list, so TWAP coverage stays in sync with whatever the oracle actually prices
-// (including denoms added or removed via governance whitelist changes).
-func (k Keeper) AfterOracleTally(ctx sdk.Context) {
+// AfterOracleTally is called by the oracle module after a tally completes.
+// It records only inputs used by configured assets plus the SDR input needed by
+// adaptive liquidity. The same deterministic list can drive GAP-002 quorum.
+func (k Keeper) AfterOracleTally(ctx sdk.Context, votePeriod uint64, votePowers []oracletypes.DenomVotePower) {
 	currentTime := ctx.BlockTime().Unix()
 	k.SetLastOracleTallyTime(ctx, currentTime)
 
-	// Sample every active Luna exchange rate. Each entry is the LUNC price in
-	// that currency (e.g., ukrw returns LUNC price in KRW); the MetaUSDDenom
-	// entry is the USTC price in USD. Only positive rates are recorded.
-	k.OracleKeeper.IterateLunaExchangeRates(ctx, func(denom string, price math.LegacyDec) (stop bool) {
-		if price.IsPositive() {
+	for _, denom := range k.trackedMarketOracleDenoms() {
+		price, err := k.OracleKeeper.GetLunaExchangeRate(ctx, denom)
+		if err == nil && price.IsPositive() {
 			k.AddTWAPPrice(ctx, denom, price)
 		}
-		return false
-	})
+	}
+
+	k.updateOracleQuorum(ctx, votePeriod, votePowers)
 }
 
 // CheckAndUpdateDailyCapForSwap checks if a proposed swap would exceed daily cap limits and updates usage
-// Each day allows draining up to DailyCapFactor × baseline (e.g. 10% of 1M = 100k per day)
+// Each day allows draining up to DailyCapFactor × baseline (e.g. 10% of 1M = 100k per day).
+// askCoin is the gross amount leaving Market, including the swap fee.
 // When you swap A→B, you drain B and add A. Adding A back reduces B's drainage counter.
 //
 // askCoin must be the gross amount leaving the pool for the ask denom, i.e. the
@@ -428,11 +490,10 @@ func (k Keeper) CheckAndUpdateDailyCapForSwap(ctx sdk.Context, offerCoin sdk.Coi
 	// Check the ask denom (what's being drained from the pool)
 	askBaseline := k.GetDailyCapBaseline(ctx, askCoin.Denom)
 	if askBaseline.IsZero() {
-		// No baseline for this denom. Seed the baseline from the current pool balance
+		// A denom funded outside an epoch boundary must still be capped.
 		marketAddr := k.AccountKeeper.GetModuleAddress(types.ModuleName)
 		askBaseline = k.BankKeeper.GetBalance(ctx, marketAddr, askCoin.Denom).Amount
 		if askBaseline.IsZero() {
-			// Nothing to drain; the liquidity check reports this more precisely.
 			return nil
 		}
 		k.SetDailyCapBaseline(ctx, askCoin.Denom, askBaseline)
@@ -454,7 +515,7 @@ func (k Keeper) CheckAndUpdateDailyCapForSwap(ctx sdk.Context, offerCoin sdk.Coi
 	// Check if the offer denom was previously drained - if so, this swap adds it back
 	offerBaseline := k.GetDailyCapBaseline(ctx, offerCoin.Denom)
 	if !offerBaseline.IsZero() {
-		// Reduce the offer denom's usage by the amount we're adding back via offer
+		// Reduce the offer denom usage by the amount we're adding back via offer
 		// This is the key insight: if we drained LUNC and now offer LUNC, we're undoing the drainage
 		offerUsage := k.GetDailyCapUsage(ctx, offerCoin.Denom)
 		if offerUsage.IsPositive() {

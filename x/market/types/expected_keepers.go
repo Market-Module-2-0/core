@@ -11,6 +11,7 @@ import (
 type AccountKeeper interface {
 	GetModuleAddress(name string) sdk.AccAddress
 	GetModuleAccount(ctx context.Context, moduleName string) sdk.ModuleAccountI
+	SetModuleAccount(ctx context.Context, moduleAccount sdk.ModuleAccountI)
 	GetAccount(ctx context.Context, addr sdk.AccAddress) sdk.AccountI // only used for simulation
 }
 
@@ -26,6 +27,7 @@ type BankKeeper interface {
 	// only used for simulation
 	SpendableCoins(ctx context.Context, addr sdk.AccAddress) sdk.Coins
 	GetBalance(ctx context.Context, addr sdk.AccAddress, denom string) sdk.Coin
+	GetSupply(ctx context.Context, denom string) sdk.Coin
 	IsSendEnabledCoin(ctx context.Context, coin sdk.Coin) bool
 }
 
