@@ -40,6 +40,7 @@ type NodeConfig struct {
 	SnapshotInterval   uint64 // statesync snapshot every Nth block (0 to disable)
 	SnapshotKeepRecent uint32 // number of recent snapshots to keep and serve (0 to keep all)
 	IsValidator        bool   // flag indicating whether a node should be a validator
+	StakeAmount        int64  // optional validator stake override; zero keeps the chain default
 }
 
 const (
@@ -407,6 +408,9 @@ func updateGenUtilGenesis(c *internalChain) func(*genutiltypes.GenesisState) {
 			stakeAmountCoin := StakeAmountCoinA
 			if c.chainMeta.ID != ChainAID {
 				stakeAmountCoin = StakeAmountCoinB
+			}
+			if node.stakeAmount > 0 {
+				stakeAmountCoin = sdk.NewInt64Coin(TerraDenom, node.stakeAmount)
 			}
 			createValmsg, err := node.buildCreateValidatorMsg(stakeAmountCoin)
 			if err != nil {

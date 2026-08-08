@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	sdkmath "cosmossdk.io/math"
@@ -295,6 +296,25 @@ func (n *NodeConfig) QueryCurrentHeight() (int64, error) {
 		return 0, err
 	}
 	return status.SyncInfo.LatestBlockHeight, nil
+}
+
+// QueryValidatorTokens returns the validator's current bonded token amount.
+func (n *NodeConfig) QueryValidatorTokens(operatorAddress string) (int64, error) {
+	path := fmt.Sprintf("cosmos/staking/v1beta1/validators/%s", operatorAddress)
+	bz, err := n.QueryGRPCGateway(path)
+	if err != nil {
+		return 0, err
+	}
+
+	var response struct {
+		Validator struct {
+			Tokens string `json:"tokens"`
+		} `json:"validator"`
+	}
+	if err := json.Unmarshal(bz, &response); err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(response.Validator.Tokens, 10, 64)
 }
 
 // QueryLatestBlockTime returns the latest block time.

@@ -626,6 +626,17 @@ func (n *NodeConfig) MarketSwap(offerCoin string, askDenom string, walletName st
 	n.LogActionF("successfully swapped %s to %s", offerCoin, askDenom)
 }
 
+// MarketSwapExpectCode broadcasts a swap that is expected to be rejected by
+// DeliverTx and returns the committed response for precise assertions.
+func (n *NodeConfig) MarketSwapExpectCode(offerCoin string, askDenom string, walletName string, expectedCode int) containers.TxResponse {
+	n.LogActionF("market swap %s -> %s from %s; expecting code %d", offerCoin, askDenom, walletName, expectedCode)
+	cmd := []string{"terrad", "tx", "market", "swap", offerCoin, askDenom, fmt.Sprintf("--from=%s", walletName)}
+	response, err := n.containerManager.ExecTxCmdExpectCode(n.t, n.chainID, n.Name, cmd, expectedCode)
+	require.NoError(n.t, err)
+	require.Equal(n.t, expectedCode, response.Code)
+	return response
+}
+
 func (n *NodeConfig) GrantAddress(granter, gratee string, spendLimit string, walletName string) {
 	n.LogActionF("granting for address %s", gratee)
 	cmd := []string{"terrad", "tx", "feegrant", "grant", granter, gratee, fmt.Sprintf("--from=%s", walletName), fmt.Sprintf("--spend-limit=%s", spendLimit)}

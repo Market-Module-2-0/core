@@ -92,6 +92,35 @@ func (m *Manager) GetPool() *dockertest.Pool {
 // namely adding flags `--chain-id={chain-id} --yes --keyring-backend=test "--log_format=json"`,
 // and searching for `successStr`
 func (m *Manager) ExecTxCmdWithSuccessString(t *testing.T, chainID string, containerName string, command []string, successStr string) (bytes.Buffer, bytes.Buffer, error) {
+	txCommand := txCommandWithArgs(chainID, command)
+	return m.ExecCmd(t, containerName, txCommand, successStr, true)
+}
+
+// ExecTxCmdExpectCode broadcasts a transaction that must pass CheckTx, waits
+// for DeliverTx and returns the committed response with the expected code.
+func (m *Manager) ExecTxCmdExpectCode(t *testing.T, chainID string, containerName string, command []string, expectedCode int) (TxResponse, error) {
+	txCommand := txCommandWithArgs(chainID, command)
+	outBuf, errBuf, err := m.ExecCmd(t, containerName, txCommand, "txhash", false)
+	if err != nil {
+		return TxResponse{}, err
+	}
+
+	txResponse, err := parseTxResponse(outBuf.String())
+	if err != nil {
+		return TxResponse{}, fmt.Errorf("failed to parse broadcast response: %w; stdout=%q stderr=%q", err, outBuf.String(), errBuf.String())
+	}
+	if txResponse.Code != 0 {
+		return txResponse, fmt.Errorf("transaction failed CheckTx with code %d: %s", txResponse.Code, txResponse.RawLog)
+	}
+	if txResponse.TxHash == "" {
+		return txResponse, fmt.Errorf("broadcast response did not contain a transaction hash")
+	}
+
+	committed, _, _, err := m.queryTxHashWithCode(t, containerName, txResponse.TxHash, expectedCode)
+	return committed, err
+}
+
+func txCommandWithArgs(chainID string, command []string) []string {
 	allTxArgs := []string{fmt.Sprintf("--chain-id=%s", chainID), "--yes", "--keyring-backend=test", "--log_format=json"}
 	// parse to see if command has gas flags. If not, add default gas flags.
 	addGasFlags := true
@@ -103,8 +132,7 @@ func (m *Manager) ExecTxCmdWithSuccessString(t *testing.T, chainID string, conta
 	if addGasFlags {
 		allTxArgs = append(allTxArgs, txDefaultGasArgs...)
 	}
-	txCommand := append(command, allTxArgs...) //nolint
-	return m.ExecCmd(t, containerName, txCommand, successStr, true)
+	return append(append([]string{}, command...), allTxArgs...)
 }
 
 // ExecHermesCmd executes command on the hermes relayer 1 container.
@@ -217,9 +245,14 @@ func (m *Manager) ExecCmd(t *testing.T, containerName string, command []string, 
 }
 
 func (m *Manager) ExecQueryTxHash(t *testing.T, containerName, txHash string) (bytes.Buffer, bytes.Buffer, error) {
+	_, outBuf, errBuf, err := m.queryTxHashWithCode(t, containerName, txHash, 0)
+	return outBuf, errBuf, err
+}
+
+func (m *Manager) queryTxHashWithCode(t *testing.T, containerName, txHash string, expectedCode int) (TxResponse, bytes.Buffer, bytes.Buffer, error) {
 	t.Helper()
 	if _, ok := m.resources[containerName]; !ok {
-		return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("no resource %s found", containerName)
+		return TxResponse{}, bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("no resource %s found", containerName)
 	}
 	containerID := m.resources[containerName].Container.ID
 
@@ -228,6 +261,7 @@ func (m *Manager) ExecQueryTxHash(t *testing.T, containerName, txHash string) (b
 		outBuf bytes.Buffer
 		errBuf bytes.Buffer
 		err    error
+		resp   TxResponse
 	)
 
 	command := []string{"terrad", "query", "tx", txHash, "-o=json"}
@@ -236,7 +270,7 @@ func (m *Manager) ExecQueryTxHash(t *testing.T, containerName, txHash string) (b
 	defer cancel()
 
 	if m.isDebugLogEnabled {
-		t.Logf("\n\nRunning: \"%s\", success condition is \"code: 0\"", txHash)
+		t.Logf("\n\nRunning: \"%s\", expected committed code is %d", txHash, expectedCode)
 	}
 	maxDebugLogTriesLeft := maxDebugLogsPerCommand
 
@@ -255,7 +289,7 @@ func (m *Manager) ExecQueryTxHash(t *testing.T, containerName, txHash string) (b
 			Cmd:          command,
 		})
 		if err != nil {
-			return outBuf, errBuf, err
+			return TxResponse{}, outBuf, errBuf, err
 		}
 
 		err = m.pool.Client.StartExec(exec.ID, docker.StartExecOptions{
@@ -265,7 +299,7 @@ func (m *Manager) ExecQueryTxHash(t *testing.T, containerName, txHash string) (b
 			ErrorStream:  &errBuf,
 		})
 		if err != nil {
-			return outBuf, errBuf, err
+			return TxResponse{}, outBuf, errBuf, err
 		}
 
 		if (defaultErrRegex.MatchString(errBuf.String()) || m.isDebugLogEnabled) && maxDebugLogTriesLeft > 0 &&
@@ -278,8 +312,16 @@ func (m *Manager) ExecQueryTxHash(t *testing.T, containerName, txHash string) (b
 			maxDebugLogTriesLeft--
 		}
 
-		successConditionMet = strings.Contains(outBuf.String(), "code\":0") || strings.Contains(errBuf.String(), "code\":0")
-		if successConditionMet {
+		parsed, parseErr := parseCommittedTxResponse(outBuf.String())
+		if parseErr == nil && parsed.TxHash != "" {
+			if parsed.Code != expectedCode {
+				return parsed, outBuf, errBuf, fmt.Errorf(
+					"transaction %s committed with code %d, expected %d: %s",
+					txHash, parsed.Code, expectedCode, parsed.RawLog,
+				)
+			}
+			resp = parsed
+			successConditionMet = true
 			break
 		}
 
@@ -287,10 +329,10 @@ func (m *Manager) ExecQueryTxHash(t *testing.T, containerName, txHash string) (b
 	}
 
 	if !successConditionMet {
-		return outBuf, errBuf, fmt.Errorf("success condition for txhash %s \"code: 0\" command %s was not met.\t stdout:\t %s \t stderr: \t %s \t", txHash, command, outBuf.String(), errBuf.String())
+		return TxResponse{}, outBuf, errBuf, fmt.Errorf("transaction %s was not committed with code %d: command %s stdout=%s stderr=%s", txHash, expectedCode, command, outBuf.String(), errBuf.String())
 	}
 
-	return outBuf, errBuf, nil
+	return resp, outBuf, errBuf, nil
 }
 
 // RunHermesResource runs a Hermes container. Returns the container resource and error if any.
@@ -493,4 +535,39 @@ func parseTxResponse(outStr string) (txResponse TxResponse, err error) {
 		}
 	}
 	return txResponse, err
+}
+
+func parseCommittedTxResponse(outStr string) (TxResponse, error) {
+	startIdx := strings.Index(outStr, "{\"height\":\"")
+	if startIdx == -1 {
+		return TxResponse{}, fmt.Errorf("start of committed transaction JSON not found")
+	}
+
+	var response struct {
+		Code      int    `json:"code"`
+		Codespace string `json:"codespace"`
+		Data      string `json:"data"`
+		GasUsed   string `json:"gas_used"`
+		GasWanted string `json:"gas_wanted"`
+		Height    string `json:"height"`
+		Info      string `json:"info"`
+		Timestamp string `json:"timestamp"`
+		TxHash    string `json:"txhash"`
+		RawLog    string `json:"raw_log"`
+	}
+	if err := json.Unmarshal([]byte(outStr[startIdx:]), &response); err != nil {
+		return TxResponse{}, fmt.Errorf("committed transaction JSON unmarshal error: %w", err)
+	}
+	return TxResponse{
+		Code:      response.Code,
+		Codespace: response.Codespace,
+		Data:      response.Data,
+		GasUsed:   response.GasUsed,
+		GasWanted: response.GasWanted,
+		Height:    response.Height,
+		Info:      response.Info,
+		Timestamp: response.Timestamp,
+		TxHash:    response.TxHash,
+		RawLog:    response.RawLog,
+	}, nil
 }
