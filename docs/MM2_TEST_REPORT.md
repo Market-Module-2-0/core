@@ -1,302 +1,311 @@
-# Rapport de validation du Market Module 2.0 No-Mint
+# Market Module 2.0 No-Mint Validation Report
 
-> Statut : campagne locale terminée
-> Date de démarrage : 16 juillet 2026
-> Dernière mise à jour : 8 août 2026
-> Langue : français
-> Conclusion finale : **NO-GO pour test communautaire public et mainnet en l'état**
+> Status: local validation campaign completed
+>
+> Campaign start date: July 16, 2026
+>
+> Last updated: August 9, 2026
+>
+> Language: English
+>
+> Final conclusion: **NO-GO for public community testing or mainnet in the current state**
 
-## Partie I — Tests appliqués et corrections
+## Part I — Tests Performed and Corrections
 
-Cette partie rassemble les scénarios exécutés, leurs preuves et les corrections apportées aux anomalies révélées par les tests. La partie II est réservée aux mécanismes ajoutés pour améliorer la conformité, la sécurité ou la maintenabilité de MM2 au-delà de la correction directe d'un test en échec.
+This part records the executed scenarios, their evidence, and the corrections made for issues revealed by testing. Part II is reserved for mechanisms added to improve MM2 compliance, safety, or maintainability beyond the direct correction of a failing test.
 
-### 1. Résumé exécutif
+### 1. Executive Summary
 
-Ce rapport documente la validation locale de l'implémentation No-Mint du Market Module 2.0 pour Terra Classic. L'objectif est de vérifier la conformité fonctionnelle, la sûreté économique et la résistance aux pannes avant une éventuelle ouverture à des tests communautaires.
+This report documents the local validation of the Terra Classic Market Module 2.0 No-Mint implementation. Its purpose is to assess functional compliance, economic safety, and failure resistance before opening the module to possible community testing.
 
-La campagne distingue strictement :
+The campaign strictly distinguishes:
 
-- les échecs du code MM2 ;
-- les limites ou erreurs de l'environnement de test ;
-- les écarts entre la proposition et l'implémentation ;
-- les risques qui ne peuvent être évalués complètement qu'en testnet public.
+- failures in MM2 code;
+- limitations or defects in the test environment;
+- gaps between the approved proposal and the implementation;
+- risks that can only be fully evaluated on a public testnet.
 
-Les suites Go existantes passent intégralement et les invariants économiques No-Mint ajoutés sont validés. Sur le devnet mono-validateur, les swaps puisent bien dans le pool préfinancé, les frais sont répartis conformément au profil local, les plafonds sont atomiques et les rotations d'époque détruisent les soldes résiduels sans mint Market.
+All existing Go test suites pass, together with the newly added No-Mint economic invariants. On the single-validator devnet, swaps correctly draw from the prefunded pool, fees follow the local test profile, caps are atomic, and epoch rotations burn residual balances without Market minting.
 
-Cette réussite fonctionnelle ne permet toutefois pas encore d'ouvrir le module à la communauté. Les trois défauts critiques identifiés ont été corrigés et revalidés localement : contrat du taux `UST`, initialisation de `market_accumulator`, puis migration v15 avec déploiement inactif et première activation différée. Ces corrections ne sont pas encore intégrées à des versions publiées et l'upgrade doit encore être répété sur un snapshot pré-v15 représentatif.
+This functional success is not yet sufficient to open the module to community testing. The three critical defects identified by the campaign have been corrected and revalidated locally: the `UST` rate contract, `market_accumulator` initialization, and the v15 migration with inactive deployment followed by deferred first activation. Draft reviews are now open for both the core changes and the feeder correction, but neither change is part of a released version. The upgrade must also be repeated against a representative pre-v15 snapshot.
 
-L'audit de conformité avait également identifié l'absence d'adaptation de `base_pool` et `pool_recovery_period`. Ce mécanisme est maintenant implémenté et revalidé localement, avec le plafond direct par actif conservé comme protection stricte. L'arrêt persistant après 25 blocs sous 50 % de puissance Oracle, son réarmement et le véritable TWAP sur 45 blocs sont également implémentés et couverts par des tests déterministes.
+The compliance audit also identified the absence of adaptive `base_pool` and `pool_recovery_period` calculations. This mechanism is now implemented and locally revalidated, while the direct per-asset cap remains a strict safety layer. A persistent halt after 25 blocks below 50% Oracle voting power, controlled recovery, and a true 45-block TWAP are also implemented and covered by deterministic tests.
 
-GAP-004 a finalement été requalifié : le frein de gouvernance existait déjà sous la forme de `MinStabilitySpread = 100 %`, valeur historiquement utilisée sur Columbus-5. Il ferme les swaps en produisant une sortie nette nulle. La route accélérée possède aussi le seuil `0,667`, mais son dépôt minimal conservait le denom générique `stake`, inutilisable sur Terra Classic. Le genesis personnalisé et la migration v15 normalisent désormais les deux dépôts en `uluna`. La fermeture, l'absence de mutation, la persistance et la réouverture sont testées.
+GAP-004 was ultimately reclassified. The existing governance brake already existed as `MinStabilitySpread = 100%`, the value historically used on Columbus-5. It closes swaps by producing a zero net output. The expedited governance route also has the required `0.667` threshold, but its minimum deposit still used the generic `stake` denom, which is unusable on Terra Classic. Custom genesis and the v15 migration now normalize both regular and expedited deposits to `uluna`. Closure, non-mutation, persistence, and reopening are tested.
 
-Le blocage `E2E-001` est également levé. Le harnais officiel démarre désormais quatre validateurs natifs ARM64, confirme leurs connexions P2P et produit des blocs. Le scénario ciblé construit un historique TWAP par trois cycles Oracle complets, puis exécute avec succès les swaps LUNC → USTC et USTC → LUNC. Le verdict reste néanmoins **NO-GO** jusqu'à publication des correctifs locaux, essai d'upgrade sur snapshot et extension des scénarios multi-validateur aux pertes de quorum et à la gouvernance.
+The `E2E-001` infrastructure blocker is also resolved. The official harness now starts four native ARM64 validators, confirms their P2P connections, and produces blocks. The targeted scenario builds a complete TWAP history through three Oracle cycles, then successfully executes LUNC → USTC and USTC → LUNC swaps. The verdict nevertheless remains **NO-GO** until the draft changes are reviewed and integrated, the upgrade is tested on a real snapshot, and multi-validator scenarios cover quorum loss and governance transitions.
 
-### 2. Références figées
+### 2. Frozen References
 
-| Élément | Référence testée |
+| Item | Tested reference |
 |---|---|
-| Proposition MM2.0 No-Mint | `Market-Module-2-0/proposal@e576826a8163d4aacb64be0709822399dd970d5f` |
-| Code Terra Classic MM2 | `8afe857005021519f314eae091c12ea7f3865fb1`, puis correctifs locaux INT-002, INT-003 et GAP-001 à GAP-004 |
-| Branche locale | `mm2-development` |
-| Branche source | `upstream/feat/mm-implementation` |
-| Feeder Oracle StrathCole | `89cd2983015f47aa6fe005ebc3eb35e24789ba1a`, puis correctif local `mm2-ust-price` |
-| Image du nœud | `terra-classic-devnet:mm2` (`441d70cc604d`) |
-| Image du feeder | baseline `ee5143babfc8`, correctif local `952be0ca1363` |
-| Image E2E multi-validateur | `terra:debug`, construite nativement pour `linux/arm64` |
+| MM2.0 No-Mint proposal | `Market-Module-2-0/proposal@e576826a8163d4aacb64be0709822399dd970d5f` |
+| Terra Classic MM2 base | `c5bf7edb5628bb15a45d7c2a0744c74dd877ec14` plus the four commits in draft core PR #3 |
+| Local branch | `mm2-development` |
+| Source branch | `upstream/feat/mm-implementation` |
+| Core review | [Market-Module-2-0/core#3](https://github.com/Market-Module-2-0/core/pull/3), draft |
+| StrathCole Oracle feeder | `89cd2983015f47aa6fe005ebc3eb35e24789ba1a` plus correction `508711dff4d26d45bf39c5d7d0a87692de25dba6` |
+| Feeder review | [StrathCole/oracle-go#1](https://github.com/StrathCole/oracle-go/pull/1), draft |
+| Node image | `terra-classic-devnet:mm2` (`441d70cc604d`) |
+| Feeder image | baseline `ee5143babfc8`, local fix `952be0ca1363` |
+| Multi-validator E2E image | `terra:debug`, built natively for `linux/arm64` |
 
-### 3. Environnement
+### 3. Environment
 
-| Composant | Valeur |
+| Component | Value |
 |---|---|
 | Machine | Apple Silicon ARM64 |
-| Système hôte | macOS / Darwin 25.5.0 |
+| Host system | macOS / Darwin 25.5.0 |
 | Go | 1.24.7 darwin/arm64 |
 | Docker Engine | 28.1.1 linux/arm64 |
 | Docker Desktop | 4.41.2 |
 | Chain ID | `mm2-local-1` |
-| Nœud | sain |
-| Feeder Oracle | sain |
-| Vote Oracle | toutes les 5 hauteurs |
-| Époque MM2 locale | 100 blocs |
+| Node | healthy |
+| Oracle feeder | healthy |
+| Oracle voting period | every 5 heights |
+| Local MM2 epoch | 100 blocks |
 
-Le nœud, ses données et ses ports sont isolés du `terrad` éventuellement installé sur l'hôte. Les secrets du validateur ne sont pas inclus dans ce rapport.
+The node, its data, and its ports are isolated from any `terrad` installation on the host. Validator secrets are not included in this report.
 
-### 4. Paramètres MM2 observés
+### 4. Observed MM2 Parameters
 
-| Paramètre | Valeur locale |
+| Parameter | Local value |
 |---|---:|
-| Spread minimum | 0,35 % |
-| Burn des frais de swap | 50 % |
-| Community Pool | 0 % |
-| Reste des frais vers Oracle | 50 % |
-| Ancienneté Oracle maximale | 75 secondes |
-| Fenêtre TWAP | 45 blocs |
-| Déviation TWAP maximale | 10 % |
-| Plafond journalier strict | 10 % de la baseline |
-| Facteur du calcul adaptatif | 7 % |
-| Redirection fiscale vers l'accumulateur | 60 % |
+| Minimum spread | 0.35% |
+| Swap-fee burn | 50% |
+| Community Pool | 0% |
+| Remaining fee sent to Oracle | 50% |
+| Maximum Oracle age | 75 seconds |
+| TWAP window | 45 blocks |
+| Maximum TWAP deviation | 10% |
+| Strict daily cap | 10% of baseline |
+| Adaptive calculation factor | 7% |
+| Tax redirection to accumulator | 60% |
 
-### 5. Résultats synthétiques
+### 5. Summary Results
 
-| ID | Domaine | Test | Statut |
+| ID | Area | Test | Status |
 |---|---|---|---|
-| BASE-001 | Compilation/tests | Modules Market, Oracle, Tax et Treasury sans cache | PASS |
-| BASE-002 | Régression | Suite complète `go test -count=1 ./...` | PASS |
-| UNIT-001 | Invariants | No-Mint et comptabilité des frais dans les deux sens | PASS |
-| UNIT-002 | Époque | Burn des soldes puis refill sans création monétaire | PASS |
-| FUZZ-001 | Robustesse | Fuzzing des cotations positives, 118 368 exécutions | PASS |
-| ENV-001 | Environnement | Exécution Go dans le sandbox avec cache global | ENVIRONMENT |
-| ORA-001 | Oracle live | Feeder sain et connecté au nœud | PASS |
-| ORA-002 | Oracle live | Prévotes et votes exécutés on-chain | PASS |
-| ORA-003 | Oracle live | Taux `uusd` et `UST` disponibles on-chain | PASS |
-| ORA-004 | Panne Oracle | Refus atomique, suppression des taux et reprise du feeder | PASS ; auto-kill GAP-002 couvert localement |
-| ENV-002 | Profil local | Taux `usdr` requis par le pool virtuel | RESOLVED |
-| INT-001 | Core ↔ feeder | Sémantique du méta-denom `UST` | **RESOLVED LOCAL — PR EN ATTENTE** |
-| INT-002 | Tax ↔ Market | Initialisation de `market_accumulator` | **RESOLVED LOCAL — PR EN ATTENTE** |
-| INT-003 | Upgrade v15 | Migration et première activation d'une chaîne pré-MM2 | **RESOLVED LOCAL — PR EN ATTENTE** |
-| TAX-001 | Fiscalité E2E | Redirection de 60 % vers l'accumulateur | PASS |
-| EPOCH-001 | Époque E2E | Burn intégral du pool précédent et refill intégral | PASS |
-| SWAP-001 | Swap E2E | LUNC → USTC, transfert depuis le pool et frais 50/50 | PASS après correction INT-001 |
-| SWAP-002 | Swap E2E | USTC → LUNC, transfert depuis le pool et frais 50/50 | PASS après correction INT-001 |
-| SAFE-001 | Cap journalier | Refus au-delà de 10 % et atomicité | PASS |
-| SAFE-002 | Paire autorisée | Refus USTC → SDR et atomicité | PASS |
-| LOAD-001 | Charge | 20 swaps séquencés et comportement à la frontière d'époque | PASS |
-| RES-001 | Redémarrage | Persistance des hauteurs, soldes et taux Oracle | PASS |
-| RES-002 | Export/import | Export complet et reprise dans un home vierge | PASS — export par défaut corrigé localement |
-| E2E-001 | Multi-validateur | Harnais officiel à quatre validateurs, Oracle, TWAP et swaps bidirectionnels | **RESOLVED — TEST CIBLÉ PASS** |
-| IMP-001 à IMP-007 | Améliorations | Liquidité adaptative, durcissement de l'époque, registre d'actifs, auto-kill Oracle, véritable TWAP et frein de gouvernance | **IMPLEMENTED LOCAL — TESTS PASS** |
-| GAP-002 | Sécurité Oracle | Auto-kill quorum utilisant l'état persistant d'activation | **RESOLVED LOCAL — PANNE MULTI-VALIDATEUR À TESTER** |
-| GAP-003 | TWAP | Moyenne réellement pondérée et phase d'amorçage sûre | **RESOLVED LOCAL — TESTS PASS** |
-| GAP-004 | Gouvernance | Fermeture et réouverture par le spread historique, route accélérée et persistance | **RESOLVED LOCAL — TESTS PASS** |
-| CORE-001 | Exploitation | `terrad export` sans liste de modules | **RESOLVED LOCAL — TESTS PASS** |
+| BASE-001 | Build/tests | Market, Oracle, Tax, and Treasury modules without cache | PASS |
+| BASE-002 | Regression | Full `go test -count=1 ./...` suite | PASS |
+| UNIT-001 | Invariants | No-Mint and fee accounting in both swap directions | PASS |
+| UNIT-002 | Epoch | Burn balances, then refill without monetary creation | PASS |
+| FUZZ-001 | Robustness | Positive quote fuzzing, 118,368 executions | PASS |
+| ENV-001 | Environment | Go execution in sandbox with global cache | ENVIRONMENT |
+| ORA-001 | Live Oracle | Feeder healthy and connected to node | PASS |
+| ORA-002 | Live Oracle | Prevotes and votes executed on-chain | PASS |
+| ORA-003 | Live Oracle | `uusd` and `UST` rates available on-chain | PASS |
+| ORA-004 | Oracle outage | Atomic rejection, rate removal, and feeder recovery | PASS; GAP-002 auto-halt covered locally |
+| ENV-002 | Local profile | `usdr` rate required by the virtual pool | RESOLVED |
+| INT-001 | Core ↔ feeder | `UST` meta-denom semantics | **RESOLVED LOCAL — DRAFT PR OPEN** |
+| INT-002 | Tax ↔ Market | `market_accumulator` initialization | **RESOLVED LOCAL — DRAFT PR OPEN** |
+| INT-003 | v15 upgrade | Migration and first activation of a pre-MM2 chain | **RESOLVED LOCAL — DRAFT PR OPEN** |
+| TAX-001 | E2E taxation | 60% redirection to accumulator | PASS |
+| EPOCH-001 | E2E epoch | Complete burn of previous pool and complete refill | PASS |
+| SWAP-001 | E2E swap | LUNC → USTC, pool-funded output, and 50/50 fee split | PASS after INT-001 correction |
+| SWAP-002 | E2E swap | USTC → LUNC, pool-funded output, and 50/50 fee split | PASS after INT-001 correction |
+| SAFE-001 | Daily cap | Rejection above 10% and atomicity | PASS |
+| SAFE-002 | Allowed pair | USTC → SDR rejection and atomicity | PASS |
+| LOAD-001 | Load | 20 sequenced swaps and epoch-boundary behavior | PASS |
+| RES-001 | Restart | Persistence of heights, balances, and Oracle rates | PASS |
+| RES-002 | Export/import | Complete export and restart from a clean home | PASS — default export fixed locally |
+| E2E-001 | Multi-validator | Official four-validator harness, Oracle, TWAP, and bidirectional swaps | **RESOLVED — TARGETED TEST PASS** |
+| IMP-001 to IMP-007 | Improvements | Adaptive liquidity, epoch hardening, asset registry, Oracle auto-halt, true TWAP, and governance brake | **IMPLEMENTED LOCAL — TESTS PASS** |
+| GAP-002 | Oracle safety | Quorum auto-halt using persistent activation state | **RESOLVED LOCAL — MULTI-VALIDATOR OUTAGE STILL TO TEST** |
+| GAP-003 | TWAP | Truly weighted average and safe bootstrap phase | **RESOLVED LOCAL — TESTS PASS** |
+| GAP-004 | Governance | Closure and reopening through historical spread, expedited path, and persistence | **RESOLVED LOCAL — TESTS PASS** |
+| CORE-001 | Operations | `terrad export` without a module list | **RESOLVED LOCAL — TESTS PASS** |
 
-`ENV-001` et `ENV-002` ne sont pas des échecs fonctionnels MM2. `E2E-001` était également un défaut d'infrastructure et est maintenant résolu. `CORE-001`, désormais corrigé localement, appartient au fonctionnement général du dépôt et non à la logique économique MM2.
+`ENV-001` and `ENV-002` are not functional MM2 failures. `E2E-001` was an infrastructure defect and is now resolved. `CORE-001`, now corrected locally, belongs to general application operation rather than MM2 economic logic.
 
-### 6. Preuves de baseline
+### 6. Baseline Evidence
 
-#### BASE-001 — Modules directement concernés
+#### BASE-001 — Directly Affected Modules
 
-Commande :
+Command:
 
 ```bash
 go test -count=1 ./x/market/... ./x/oracle/... ./x/tax/... ./x/treasury/...
 ```
 
-Résultat : tous les packages contenant des tests ont retourné `ok`.
+Result: every package containing tests returned `ok`.
 
-#### BASE-002 — Dépôt complet
+#### BASE-002 — Complete Repository
 
-Commande :
+Command:
 
 ```bash
 go test -count=1 ./...
 ```
 
-Résultat : tous les packages contenant des tests ont retourné `ok`. Aucun panic, échec de compilation ou test en échec n'a été observé.
+Result: every package containing tests returned `ok`. No panic, compilation failure, or failing test was observed.
 
-#### UNIT-001, UNIT-002 et FUZZ-001 — Invariants ajoutés
+#### UNIT-001, UNIT-002, and FUZZ-001 — Added Invariants
 
-Des tests déterministes couvrent les deux directions de swap, l'absence de mint, la conservation des flux entre trader et pool, le burn, le compte Oracle, ainsi que le burn/refill d'époque. Ils passent sans cache. Un fuzzing de 30 secondes sur le calcul de cotation a exécuté 118 368 cas sans panic, valeur négative ou résultat nul inattendu.
+Deterministic tests cover both swap directions, absence of minting, conservation of flows between trader and pool, burn accounting, the Oracle account, and epoch burn/refill. They pass without cache. A 30-second fuzz run over quote calculation executed 118,368 cases without a panic, negative value, or unexpected zero result.
 
-#### TAX-001 — Répartition fiscale on-chain
+#### TAX-001 — On-Chain Tax Distribution
 
-Une transaction taxable a produit `1 000 000 uluna` et `500 000 uusd` de taxe. Les événements et les soldes confirment la répartition suivante :
+A taxable transaction produced `1,000,000 uluna` and `500,000 uusd` in tax. Events and balances confirm the following distribution:
 
-| Destination | `uluna` | `uusd` | Part |
+| Destination | `uluna` | `uusd` | Share |
 |---|---:|---:|---:|
-| Community Pool | 800 | 400 | 0,08 % |
-| Oracle | 39 200 | 19 600 | 3,92 % |
-| `market_accumulator` | 600 000 | 300 000 | **60 %** |
-| Burn | 360 000 | 180 000 | 36 % |
+| Community Pool | 800 | 400 | 0.08% |
+| Oracle | 39,200 | 19,600 | 3.92% |
+| `market_accumulator` | 600,000 | 300,000 | **60%** |
+| Burn | 360,000 | 180,000 | 36% |
 
-Transaction : `432EAA6B05C98E2AD94616F17BB163768B5FE9E40BF2703476B48239C0AA10E9`, hauteur 1558.
+Transaction: `432EAA6B05C98E2AD94616F17BB163768B5FE9E40BF2703476B48239C0AA10E9`, height 1558.
 
-#### EPOCH-001 — Rotation du pool
+#### EPOCH-001 — Pool Rotation
 
-À la frontière d'époque 1600/1601, l'intégralité du solde de l'accumulateur a été déplacée vers `market` : `9 999 600 000 uluna` et `99 800 000 uusd`. À la frontière suivante 1700/1701, après les deux swaps, le pool résiduel de `9 818 973 524 uluna` et `100 794 495 uusd` a été intégralement brûlé. La supply `uusd` a diminué exactement de `100 794 495` dans ce bloc. La supply `uluna` reflète simultanément le burn du pool et l'émission normale du module Mint ; les événements permettent de séparer ces deux flux.
+At the 1600/1601 epoch boundary, the full accumulator balance moved to `market`: `9,999,600,000 uluna` and `99,800,000 uusd`. At the next 1700/1701 boundary, after both swaps, the residual pool of `9,818,973,524 uluna` and `100,794,495 uusd` was completely burned. The `uusd` supply decreased by exactly `100,794,495` in that block. The `uluna` supply simultaneously reflects the pool burn and normal Mint-module issuance; events separate the two flows.
 
-#### SWAP-001 et SWAP-002 — Exécution réelle et comptabilité
+#### SWAP-001 and SWAP-002 — Real Execution and Accounting
 
-| Sens | Offre | Reçu | Frais | Burn | Oracle | Hash |
+| Direction | Offer | Received | Fee | Burn | Oracle | Hash |
 |---|---:|---:|---:|---:|---:|---|
-| LUNC → USTC | `1 000 000 uluna` | `5 486 uusd` | `19 uusd` | `9 uusd` | `10 uusd` | `DC0CE1B0…F2201D` |
-| USTC → LUNC | `1 000 000 uusd` | `180 990 784 uluna` | `635 692 uluna` | `317 846 uluna` | `317 846 uluna` | `D6B7DAF1…ED657B` |
+| LUNC → USTC | `1,000,000 uluna` | `5,486 uusd` | `19 uusd` | `9 uusd` | `10 uusd` | `DC0CE1B0…F2201D` |
+| USTC → LUNC | `1,000,000 uusd` | `180,990,784 uluna` | `635,692 uluna` | `317,846 uluna` | `317,846 uluna` | `D6B7DAF1…ED657B` |
 
-Dans les deux cas, l'offre a été créditée au compte `market`, la sortie et les frais ont été débités de ce même compte, et aucun événement de mint n'a été émis par Market. Les montants sont mécaniquement cohérents avec le taux Oracle reçu, mais économiquement incorrects à cause de `INT-001`.
+In both cases, the offer was credited to the `market` account, the output and fees were debited from that same account, and Market emitted no mint event. The amounts are mechanically consistent with the Oracle rate received, but they were economically incorrect before the `INT-001` correction.
 
-#### SAFE-001 et SAFE-002 — Refus atomiques
+#### SAFE-001 and SAFE-002 — Atomic Rejections
 
-Un swap de `2 000 000 000 uluna`, coté à `10 973 993 uusd`, dépassait le cap de 10 % d'un pool de référence à `99 800 000 uusd`. La transaction `42631C30…1AB3E6` a été refusée avec le code Market 9 (`daily swap cap exceeded`). Les soldes du pool sont restés exactement `9 999 600 000 uluna` et `99 800 000 uusd`.
+A `2,000,000,000 uluna` swap quoted at `10,973,993 uusd` exceeded the 10% cap of a `99,800,000 uusd` reference pool. Transaction `42631C30…1AB3E6` was rejected with Market code 9 (`daily swap cap exceeded`). Pool balances remained exactly `9,999,600,000 uluna` and `99,800,000 uusd`.
 
-Une tentative `1 000 000 uusd` vers `usdr` (`AA414446…D1C19`) a été refusée avec le code Market 5 (`invalid swap pair; not allowed`). Le pool est également resté inchangé. Dans les deux cas, seuls les frais de transaction Ante ont été facturés au signataire, conformément au fonctionnement Cosmos SDK ; aucun état produit par le message n'a été conservé.
+An attempted `1,000,000 uusd` to `usdr` swap (`AA414446…D1C19`) was rejected with Market code 5 (`invalid swap pair; not allowed`). The pool also remained unchanged. In both cases, only Ante transaction fees were charged to the signer, as expected in the Cosmos SDK; no state produced by the message was retained.
 
-#### ORA-004 — Panne et reprise du feeder
+#### ORA-004 — Feeder Outage and Recovery
 
-Le feeder a été arrêté pendant plus de 75 secondes. L'Oracle natif a retiré les taux qui n'atteignaient plus son seuil de vote. Le swap `F8E352D9…` à la hauteur 1971 a été refusé avec le code Market 3 (`no price registered with oracle`) et le pool est resté inchangé. Le code spécifique `oracle price stale` n'a pas été atteint, car la suppression du taux intervient avant la limite de fraîcheur MM2 dans ce profil.
+The feeder was stopped for more than 75 seconds. The native Oracle removed rates that no longer met its voting threshold. Swap `F8E352D9…` at height 1971 was rejected with Market code 3 (`no price registered with oracle`), and the pool remained unchanged. The more specific `oracle price stale` error was not reached because native rate removal occurs before the MM2 freshness limit in this profile.
 
-Après redémarrage, le feeder est redevenu sain et les taux `UST`, `uusd` et `usdr` ont été revotés en environ 20 secondes. Cette expérience, réalisée avant le correctif de GAP-002, valide le refus sûr et la récupération opérationnelle mais ne constitue pas une preuve E2E de l'auto-kill. Le mécanisme de 25 blocs est désormais couvert par les tests déterministes décrits sous `IMP-005` ; sa répétition sur un réseau multi-validateur reste requise.
+After restart, the feeder became healthy and `UST`, `uusd`, and `usdr` were voted on-chain again in approximately 20 seconds. This experiment predates the GAP-002 fix. It validates safe rejection and operational recovery, but it is not an E2E proof of the auto-halt. The 25-block mechanism is now covered by deterministic tests under `IMP-005`; it still needs to be repeated on a multi-validator network.
 
-#### LOAD-001 — Série de swaps et frontière d'époque
+#### LOAD-001 — Swap Series and Epoch Boundary
 
-Vingt transactions de swap ont été envoyées avec des séquences de compte valides. Les quinze premières ont été incluses avec le code 0. La frontière d'époque à la hauteur 4801 a ensuite brûlé le pool résiduel ; les cinq transactions suivantes ont été refusées avec le code Market 6 (`insufficient pool liquidity`). Aucun débit partiel du pool n'a été observé.
+Twenty swap transactions were sent with valid account sequences. The first fifteen were included with code 0. The epoch boundary at height 4801 then burned the residual pool; the following five transactions were rejected with Market code 6 (`insufficient pool liquidity`). No partial pool debit was observed.
 
-Un envoi réellement simultané depuis une seule adresse a d'abord exposé la gestion de nonce du client, pas un défaut MM2. La campagne ne revendique donc pas un benchmark de débit parallèle ; elle valide la répétition des swaps, l'atomicité et le changement d'état concurrent avec une frontière d'époque.
+A truly simultaneous submission from one address first exposed client nonce management, not an MM2 defect. The campaign therefore does not claim a parallel-throughput benchmark. It validates repeated swaps, atomicity, and state changes concurrent with an epoch boundary.
 
-#### RES-001 — Redémarrages
+#### RES-001 — Restarts
 
-Le nœud a été redémarré à partir de la hauteur 2040 et est redevenu sain à la hauteur 2056. Les soldes, les paramètres et l'état du Market ont persisté ; le feeder s'est reconnecté et a repris ses votes. Plusieurs arrêts contrôlés ultérieurs, autour des hauteurs 13 858 à 14 063, ont confirmé le même comportement.
+The node was restarted from height 2040 and returned healthy at height 2056. Balances, parameters, and Market state persisted; the feeder reconnected and resumed voting. Several later controlled stops around heights 13,858 to 14,063 confirmed the same behavior.
 
-#### RES-002 et CORE-001 — Export/import
+#### RES-002 and CORE-001 — Export/Import
 
-L'export ciblé des modules `auth`, `bank`, `market`, `oracle`, `treasury` et `tax` a produit un JSON valide contenant tous les paramètres MM2 attendus. Un export complet a ensuite réussi en donnant explicitement les 23 modules réellement enregistrés. Le fichier résultant avait une hauteur initiale 14 063 et un validateur.
+A targeted export of `auth`, `bank`, `market`, `oracle`, `treasury`, and `tax` produced valid JSON containing every expected MM2 parameter. A full export also succeeded when explicitly given the 23 registered modules. The resulting genesis started at height 14,063 with one validator.
 
-Ce genesis a été monté dans un conteneur neuf, sans le volume du devnet. Avec la clé du validateur exclusivement locale copiée temporairement, la chaîne importée a finalisé les blocs 14 063 à 14 066. La copie de clé a ensuite été supprimée.
+This genesis was mounted in a clean container without the devnet volume. With the local-only validator key temporarily copied into place, the imported chain finalized blocks 14,063 through 14,066. The copied key was then deleted.
 
-**Constat initial.** La commande par défaut suivante échouait :
+**Initial finding.** The following default command failed:
 
 ```bash
 terrad export --home /var/lib/terra --height -1
 ```
 
-Erreur : `module crisis does not exist`. Le nom `crisis` figurait dans les ordres de début de bloc, de fin de bloc et d'initialisation/export, alors que ce module n'est pas enregistré dans `appModules`. Cette incohérence générale du core n'altérait pas les données MM2, mais imposait le contournement `--modules-to-export`.
+Error: `module crisis does not exist`. The `crisis` name appeared in begin-block, end-block, and init/export orderings even though the module is not registered in `appModules`. This general core inconsistency did not corrupt MM2 data, but it required the `--modules-to-export` workaround.
 
-**Solution implémentée.** Les trois références obsolètes à `crisis` ont été retirées de ces ordres. Le module n'a pas été réintroduit, car il ne fait pas partie de l'application actuellement assemblée. Un test de régression générique construit l'application en mémoire et vérifie désormais que chaque nom présent dans les ordres de début de bloc, de fin de bloc, d'initialisation et d'export correspond à un module réellement enregistré.
+**Implemented solution.** The three obsolete `crisis` references were removed from these orderings. The module was not reintroduced because it is not part of the currently assembled application. A generic regression test now builds the application in memory and verifies that every name in the begin-block, end-block, initialization, and export orderings corresponds to a registered module.
 
-**Résultat.** L'image Docker corrigée a été reconstruite, puis `terrad export` a été exécuté sans `--modules-to-export` sur un nœud réel. La commande a terminé avec le code 0 et produit les 23 modules enregistrés, dont `market`; aucun état `crisis` absent n'a été annoncé. Le test de cohérence des ordres et la suite du package `app` passent également. `CORE-001` est donc résolu localement et le contournement n'est plus nécessaire.
+**Result.** The corrected Docker image was rebuilt, then `terrad export` was executed without `--modules-to-export` against a real node. The command exited with code 0 and produced all 23 registered modules, including `market`, without advertising absent `crisis` state. The ordering-consistency test and the complete `app` package suite also pass. `CORE-001` is resolved locally and the workaround is no longer required.
 
-#### E2E-001 — Harnais officiel multi-validateur
+#### E2E-001 — Official Multi-Validator Harness
 
-**Statut initial : BLOCKED — ENVIRONNEMENT**
-**Statut actualisé : RESOLVED — TEST CIBLÉ PASS**
+**Initial status: BLOCKED — ENVIRONMENT**
 
-##### Constat initial
+**Current status: RESOLVED — TARGETED TEST PASS**
 
-Le test officiel ciblé `TestIntegrationTestSuite/TestMarketSwap` créait quatre conteneurs, mais la chaîne restait à la hauteur 0. Les causes se cumulaient : chaque configuration P2P contenait le propre identifiant du nœud, les validateurs étaient démarrés séquentiellement alors que le premier attendait déjà le consensus, et l'image imposait `linux/amd64` sur un hôte Apple Silicon. Sous émulation, les connexions P2P échouaient notamment avec :
+##### Initial Finding
+
+The targeted official test `TestIntegrationTestSuite/TestMarketSwap` created four containers, but the chain remained at height 0. The causes accumulated: every P2P configuration included the node's own ID, validators were started sequentially while the first already waited for consensus, and the image forced `linux/amd64` on an Apple Silicon host. Under emulation, P2P connections failed with errors including:
 
 ```text
 secret conn failed: failed to decrypt SecretConnection:
 chacha20poly1305: message authentication failed
 ```
 
-Une fois le consensus rétabli, d'autres défauts du scénario sont devenus visibles : gas Oracle supérieur à la limite Ante, délégation feeder redondante, parseur incompatible avec le JSON legacy des comptes modules, sel Oracle trop long, utilitaire de vote capable de prendre une erreur CLI pour un succès, fenêtre de fraîcheur de deux secondes incompatible avec quatre validateurs et tentative de swap avant constitution complète du TWAP.
+After consensus was restored, other scenario defects became visible: Oracle gas above the Ante limit, redundant feeder delegation, a parser incompatible with legacy module-account JSON, an Oracle salt that was too long, a voting helper capable of interpreting a CLI error as success, a two-second freshness window incompatible with four validators, and a swap attempted before the TWAP was complete.
 
-##### Solution implémentée
+##### Implemented Solution
 
-- chaque nœud reçoit tous les pairs persistants sauf lui-même ;
-- les quatre conteneurs sont démarrés avant toute attente de consensus, puis chacun doit voir les trois autres pairs et avancer de plusieurs blocs ;
-- l'image E2E suit l'architecture cible Docker et sélectionne la bibliothèque `wasmvm` correspondante ;
-- les transactions Oracle utilisent explicitement la limite de `1 000 000` gas et leurs erreurs de diffusion ou d'exécution sont bloquantes ;
-- le test utilise le feeder implicite du validateur, des sels de quatre caractères et un parseur compatible avec les formats JSON legacy et protobuf ;
-- la fraîcheur E2E reprend la valeur de production de 75 secondes ;
-- le scénario exécute trois cycles prevote/vote complets afin que la première observation couvre réellement la fenêtre TWAP de 45 blocs avant tout swap ;
-- les réserves actives sont alimentées juste avant les transactions, après les rotations d'époque susceptibles de survenir pendant l'amorçage.
+- every node receives all persistent peers except itself;
+- all four containers start before any consensus wait, after which each must see the other three peers and advance several blocks;
+- the E2E image follows the target Docker architecture and selects the matching `wasmvm` library;
+- Oracle transactions explicitly use a `1,000,000` gas limit, and broadcast or execution failures are fatal;
+- the test uses the validator's implicit feeder, four-character salts, and a parser compatible with both legacy and protobuf account JSON;
+- E2E freshness uses the 75-second production value;
+- the scenario executes three complete prevote/vote cycles so the first observation truly covers the 45-block TWAP window before any swap;
+- active reserves are funded immediately before the transactions, after any epoch rotations that may occur during bootstrap.
 
-Des tests de régression vérifient l'exclusion du pair propre, la présence des autres pairs, le démarrage complet du groupe avant les attentes et les deux formats de comptes modules.
+Regression tests verify self-peer exclusion, inclusion of all other peers, complete group startup before readiness checks, and both module-account JSON formats.
 
-##### Résultat
+##### Result
 
-Le 8 août 2026, le test ciblé a réussi en `138,61 s` sur quatre validateurs `linux/arm64`. Chaque validateur a soumis trois prevotes et trois votes Oracle valides. Les taux ont été tallyés, le TWAP complet a été accepté, puis les transactions suivantes ont été incluses avec le code 0 :
+On August 8, 2026, the targeted test passed in `138.61 s` on four `linux/arm64` validators. Every validator submitted three valid Oracle prevotes and three valid votes. Rates were tallied, the complete TWAP was accepted, and the following transactions were included with code 0:
 
-- `1 000 000 uluna` vers `uusd`, avec baisse du solde LUNC et hausse du solde USTC du trader ;
-- `500 000 uusd` vers `uluna`, avec baisse du solde USTC et hausse du solde LUNC du trader.
+- `1,000,000 uluna` to `uusd`, with the trader's LUNC balance decreasing and USTC balance increasing;
+- `500,000 uusd` to `uluna`, with the trader's USTC balance decreasing and LUNC balance increasing.
 
-`E2E-001` est donc fermé comme défaut d'infrastructure. Cette preuve couvre le chemin consensus → Oracle → TWAP → Market sur quatre validateurs de même puissance. Elle ne couvre pas encore une panne volontaire de quorum, des puissances inégales, une fermeture de gouvernance ou l'intégralité de la suite E2E avec IBC et state-sync.
+`E2E-001` is therefore closed as an infrastructure defect. This evidence covers consensus → Oracle → TWAP → Market with four equal-power validators. It does not yet cover a deliberate quorum outage, unequal voting power, governance closure, or the full E2E suite with IBC and state sync.
 
-### 7. Matrice de validation
+### 7. Validation Matrix
 
-| Domaine | Exigence principale | Niveau actuel |
+| Area | Main requirement | Current level |
 |---|---|---|
-| Swap | LUNC ↔ USTC seulement | PASS, stable→stable refusé |
-| No-Mint | aucune hausse de supply Market lors d'un swap | PASS unitaire et E2E |
-| Frais | 0,35 %, 50 % burn, 50 % Oracle | PASS avec paramètres locaux forcés |
-| Liquidité | aucune sortie supérieure au pool | PASS |
-| Atomicité | aucun état du message après un refus | PASS |
-| Fiscalité | 60 % vers l'accumulateur | PASS ; migration locale couverte |
-| Époque | burn des restes puis refill | PASS avec époque locale de 100 blocs |
-| Oracle | prix USTC réel et récent | PASS après correction locale du feeder |
-| TWAP | refus au-delà de 10 % d'un TWAP réellement pondéré sur 45 blocs | PASS déterministe ; historique incomplet refusé |
-| Cap journalier | maximum 10 % et reset | PASS E2E pour le dépassement |
-| Quorum | arrêt sous 50 % de puissance pendant 25 blocs | PASS déterministe pondéré ; chemin Oracle sain PASS sur quatre validateurs, panne E2E restant à jouer |
-| Gouvernance | fermeture accélérée à 0,667 et activation différée | PASS local ; mécanisme historique réutilisé, E2E multi-validateur restant |
-| Liquidité adaptative | recalcul de `base_pool` et PRP à l'époque | PASS local ; facteur adaptatif de 7 % |
-| Résilience | restart et export/import | PASS, export par défaut inclus |
-| Upgrade | migration d'un état pré-MM2 | PASS local sur état sans les nouvelles clés ; snapshot réel restant |
+| Swap | LUNC ↔ USTC only | PASS, stable-to-stable rejected |
+| No-Mint | no Market supply increase during a swap | PASS in unit and E2E tests |
+| Fees | 0.35%, 50% burn, 50% Oracle | PASS with forced local parameters |
+| Liquidity | no output larger than the pool | PASS |
+| Atomicity | no message state retained after rejection | PASS |
+| Taxation | 60% to accumulator | PASS; local migration covered |
+| Epoch | burn residual balances, then refill | PASS with a 100-block local epoch |
+| Oracle | real and recent USTC price | PASS after local feeder correction |
+| TWAP | reject above 10% of a truly weighted 45-block TWAP | deterministic PASS; incomplete history rejected |
+| Daily cap | maximum 10% and reset | E2E PASS for excess rejection |
+| Quorum | halt below 50% power for 25 blocks | deterministic weighted PASS; healthy Oracle path PASS on four validators, outage E2E pending |
+| Governance | expedited closure at 0.667 and deferred activation | local PASS; historical mechanism reused, multi-validator E2E pending |
+| Adaptive liquidity | recalculate `base_pool` and PRP at epoch | local PASS; 7% adaptive factor |
+| Resilience | restart and export/import | PASS, including default export |
+| Upgrade | migrate pre-MM2 state | local PASS from state missing new keys; real snapshot pending |
 
-### 8. Anomalies confirmées et corrections
+### 8. Confirmed Issues and Corrections
 
-#### INT-001 — Incompatibilité de format du taux `UST`
+#### INT-001 — Incompatible `UST` Rate Format
 
-**Statut : FAIL**
-**Gravité : critique / P0**
-**Périmètre : intégration entre le core MM2 et le feeder Oracle StrathCole**
+**Initial status: FAIL**
 
-Le core MM2 documente et utilise le méta-denom `UST` comme le prix USD d'un USTC. Le feeder testé convertit au contraire `USTC/USD` en un taux `USTC par LUNC` avant de le soumettre. Les deux composants sont donc fonctionnels isolément, mais leur contrat de données n'est pas compatible.
+**Severity: critical / P0**
 
-Valeurs observées pendant le test :
+**Scope: integration between the MM2 core and the StrathCole Oracle feeder**
 
-| Donnée | Valeur |
+The MM2 core documents and uses the `UST` meta-denom as the USD price of one USTC. The tested feeder instead converted `USTC/USD` into a `USTC per LUNC` rate before submitting it. Both components were functional in isolation, but their data contracts were incompatible.
+
+Values observed during testing:
+
+| Data | Value |
 |---|---:|
-| Prix LUNC/USD exposé par le feeder | `0.000059107250373` |
-| Prix USTC/USD exposé par le feeder | `0.0054963836173671` |
-| Taux `UST` voté on-chain | `0.010754254719151968` |
-| Cotation de 1 LUNC vers USTC après spread | `0.005477 USTC` |
-| Cotation de 1 USTC vers LUNC après spread | `181.287156 LUNC` |
+| LUNC/USD price exposed by feeder | `0.000059107250373` |
+| USTC/USD price exposed by feeder | `0.0054963836173671` |
+| On-chain `UST` rate | `0.010754254719151968` |
+| Quote for 1 LUNC to USTC after spread | `0.005477 USTC` |
+| Quote for 1 USTC to LUNC after spread | `181.287156 LUNC` |
 
-Le taux on-chain `UST` correspond approximativement à :
-
-```text
-LUNC/USD ÷ USTC/USD = USTC par LUNC
-```
-
-Le core le traite ensuite comme s'il représentait :
+The on-chain `UST` rate approximately matched:
 
 ```text
-USD par USTC
+LUNC/USD ÷ USTC/USD = USTC per LUNC
 ```
 
-Conséquence : les cotations MM2 ne correspondent pas au ratio de marché LUNC/USTC. Dans l'échantillon ci-dessus, la cotation LUNC vers USTC est proche de la moitié de la valeur attendue, tandis que la cotation inverse est presque doublée.
+The core then interpreted it as:
 
-Commandes de reproduction :
+```text
+USD per USTC
+```
+
+As a result, MM2 quotes did not match the LUNC/USTC market ratio. In the sample above, the LUNC-to-USTC quote was close to half the expected value, while the reverse quote was almost doubled.
+
+Reproduction commands:
 
 ```bash
 terrad query oracle exchange-rates --output json
@@ -304,87 +313,90 @@ terrad query market swap 1000000uluna uusd --output json
 terrad query market swap 1000000uusd uluna --output json
 ```
 
-**Impact :** aucun testnet communautaire ne devrait être ouvert avec cette combinaison core/feeder, car les swaps seraient économiquement mal valorisés même si les votes Oracle et les transactions sont techniquement valides.
+**Impact:** no community testnet should use this core/feeder combination because swaps would be economically mispriced even though Oracle votes and transactions were technically valid.
 
-##### Re-test après correction locale du feeder
+##### Retest After the Local Feeder Correction
 
-**Statut actualisé : RESOLVED LOCAL — PR EN ATTENTE**
+**Current status: RESOLVED LOCAL — [DRAFT PR OPEN](https://github.com/StrathCole/oracle-go/pull/1)**
 
-Le contrat retenu est celui déjà documenté par le core : `UST` transporte directement le prix `USD par USTC`. La branche locale `mm2-ust-price` du feeder traite désormais ce méta-denom comme une exception et ne lui applique plus la conversion historique `fiat par LUNC`.
+The selected contract is the one already documented by the core: `UST` directly carries `USD per USTC`. The feeder's `mm2-ust-price` branch now treats this meta-denom as an exception and does not apply the historical `fiat per LUNC` conversion.
 
-Valeurs observées le 5 août 2026 après reconstruction de l'image Oracle :
+Values observed on August 5, 2026 after rebuilding the Oracle image:
 
-| Donnée | Valeur |
+| Data | Value |
 |---|---:|
-| Prix LUNC/USD exposé par le feeder | `0.0000501052732435` |
-| Prix USTC/USD exposé par le feeder | `0.0049910125303164` |
-| Taux `UST` voté on-chain | `0.004991012530316400` |
-| Cotation de 1 LUNC vers USTC après spread | `0.010003 USTC` |
-| Cotation de 1 USTC vers LUNC après spread | `99.261887 LUNC` |
+| LUNC/USD price exposed by feeder | `0.0000501052732435` |
+| USTC/USD price exposed by feeder | `0.0049910125303164` |
+| On-chain `UST` rate | `0.004991012530316400` |
+| Quote for 1 LUNC to USTC after spread | `0.010003 USTC` |
+| Quote for 1 USTC to LUNC after spread | `99.261887 LUNC` |
 
-Deux transactions réelles ont ensuite confirmé les deux directions et la comptabilité des frais :
+Two real transactions then confirmed both directions and fee accounting:
 
-| Sens | Offre | Reçu | Frais MM2 | Burn | Oracle | Hauteur | Hash |
+| Direction | Offer | Received | MM2 fee | Burn | Oracle | Height | Hash |
 |---|---:|---:|---:|---:|---:|---:|---|
-| LUNC → USTC | `1 000 000 uluna` | `9 981 uusd` | `35 uusd` | `17 uusd` | `18 uusd` | 394787 | `01652C80…59D5556F` |
-| USTC → LUNC | `1 000 000 uusd` | `99 481 916 uluna` | `349 409 uluna` | `174 704 uluna` | `174 705 uluna` | 394797 | `B7A66F4D…DF05A78` |
+| LUNC → USTC | `1,000,000 uluna` | `9,981 uusd` | `35 uusd` | `17 uusd` | `18 uusd` | 394787 | `01652C80…59D5556F` |
+| USTC → LUNC | `1,000,000 uusd` | `99,481,916 uluna` | `349,409 uluna` | `174,704 uluna` | `174,705 uluna` | 394797 | `B7A66F4D…DF05A78` |
 
-Les tests déterministes du core et les tests du composant voter passent avec la même définition. `INT-001` est donc isolé et corrigé localement. Il ne sera considéré comme fermé pour une version communautaire qu'après commit, revue et intégration du correctif dans une version publiée du feeder.
+Core deterministic tests and voter-component tests pass with the same definition. `INT-001` is isolated and corrected locally. It should only be considered closed for a community release after review, merge, and inclusion in a released feeder version.
 
-#### ENV-002 — Taux `usdr` absent du premier profil local
+#### ENV-002 — `usdr` Rate Missing from the Initial Local Profile
 
-**Statut : RESOLVED**
-**Classification : environnement de test, pas défaut du core**
+**Status: RESOLVED**
 
-La première whitelist locale ne contenait que `uusd` et `UST`. Le calcul constant-product du Market Module utilise encore `usdr` comme unité interne et refusait donc toute cotation avec `no price registered with oracle`.
+**Classification: test environment, not a core defect**
 
-Le profil de test a été corrigé en ajoutant `usdr` à la whitelist et la source officielle IMF au feeder. Le taux a ensuite été voté on-chain et les requêtes de cotation ont pu atteindre le calcul MM2.
+The first local whitelist contained only `uusd` and `UST`. The Market Module constant-product calculation still uses `usdr` as its internal unit, so every quote failed with `no price registered with oracle`.
 
-#### INT-002 — Le compte module `market_accumulator` n'est pas initialisé au genesis
+The test profile was corrected by adding `usdr` to the whitelist and the official IMF source to the feeder. The rate was then voted on-chain, and quote queries reached the MM2 calculation.
 
-**Statut : FAIL**
-**Gravité : critique / P0**
-**Périmètre : intégration entre les modules Tax, Bank, Auth et Market**
+#### INT-002 — `market_accumulator` Module Account Not Initialized at Genesis
 
-Sur une chaîne fraîche, le genesis du module Market initialise explicitement le compte module `market`, mais pas `market_accumulator`. Il est alors possible qu'un envoi bancaire adressé à l'adresse déterministe de l'accumulateur crée d'abord un compte utilisateur ordinaire (`BaseAccount`) à cette adresse. Le post-handler fiscal essaie ensuite d'y transférer la part de taxe au moyen d'un transfert module-vers-module. Le SDK détecte que l'adresse existante n'est pas un `ModuleAccount`, déclenche un panic, puis BaseApp récupère ce panic et fait échouer la transaction.
+**Initial status: FAIL**
 
-Transaction de reproduction locale :
+**Severity: critical / P0**
+
+**Scope: integration between Tax, Bank, Auth, and Market**
+
+On a fresh chain, Market genesis explicitly initialized the `market` module account but not `market_accumulator`. A bank transfer to the accumulator's deterministic address could therefore create a regular `BaseAccount` at that address first. The tax post-handler would later attempt to transfer the tax share through a module-to-module transfer. The SDK detected that the existing address was not a `ModuleAccount`, panicked, and BaseApp recovered the panic by rejecting the transaction.
+
+Local reproduction transaction:
 
 ```text
 C297FA5A49B5E9D51C1D0A144ECCE5327467EB360A7185FA62FA0D730ECF092C
 ```
 
-Résultat observé à la hauteur 310 :
+Observed result at height 310:
 
 ```text
 code: 111222
 raw_log: account is not a module account
 ```
 
-La stack trace situe l'échec dans `tax/keeper.ProcessTaxSplits`, au moment du transfert de `fee_collector` vers `market_accumulator`. Aucun montant envoyé n'a été crédité à la destination. Le nœud est resté sain : il s'agit d'un panic transactionnel récupéré par BaseApp, pas d'un arrêt du processus.
+The stack trace placed the failure in `tax/keeper.ProcessTaxSplits` during the transfer from `fee_collector` to `market_accumulator`. No amount was credited to the destination. The node remained healthy: this was a transaction-level panic recovered by BaseApp, not a process shutdown.
 
-Cause confirmée dans le code :
+Confirmed code cause:
 
-- `x/market/genesis.go` force seulement la création du compte module `market` ;
-- le SDK crée paresseusement un compte module absent, mais panique si un compte ordinaire occupe déjà son adresse déterministe ;
-- `market_accumulator` est déclaré comme destinataire autorisé, son existence devrait donc être garantie avant toute transaction utilisateur.
+- `x/market/genesis.go` forced creation of only the `market` module account;
+- the SDK lazily creates an absent module account but panics if a regular account already occupies its deterministic address;
+- `market_accumulator` is a declared authorized destination, so its existence must be guaranteed before any user transaction.
 
-**Impact :** une transaction envoyée à l'adresse de l'accumulateur avant son initialisation peut échouer et empêcher la mise en place attendue de ce compte module. Le chemin fiscal MM2 et l'alimentation du pool ne doivent pas dépendre de l'ordre des premières transactions de la chaîne.
+**Impact:** a transaction sent to the accumulator address before initialization could fail and prevent the expected module account from being established. The MM2 tax and pool-funding paths must not depend on the ordering of a chain's first transactions.
 
-##### Re-test après correction locale du core
+##### Retest After the Local Core Correction
 
-**Statut actualisé : RESOLVED LOCAL — PR EN ATTENTE**
+**Current status: RESOLVED LOCAL — [DRAFT PR OPEN](https://github.com/Market-Module-2-0/core/pull/3)**
 
-Le core garantit désormais le compte `market_accumulator` dans deux chemins :
+The core now guarantees `market_accumulator` through two paths:
 
-- `InitGenesis` crée explicitement le compte module lorsqu'il est absent ;
-- le handler d'upgrade v15 exécute la même opération de manière idempotente avant les migrations.
+- `InitGenesis` explicitly creates the module account when absent;
+- the v15 upgrade handler performs the same idempotent operation before migrations.
 
-Si l'adresse déterministe existe déjà sous forme de `BaseAccount`, elle est convertie en `ModuleAccount`. Le numéro de compte et la séquence sont conservés. Les soldes restent inchangés, car ils sont enregistrés par adresse dans le module Bank.
+If the deterministic address already exists as a `BaseAccount`, it is converted into a `ModuleAccount`. Account number and sequence are preserved. Balances remain unchanged because the Bank module records them by address.
 
-Deux tests de régression couvrent la création depuis un état absent et la conversion d'un compte bancaire possédant `12 345 uusd`. Le second appelle deux fois l'initialisation pour vérifier l'idempotence. Après conversion, le nom du compte module, son numéro, sa séquence et son solde sont tous préservés.
+Two regression tests cover creation from absent state and conversion of a bank account holding `12,345 uusd`. The second calls initialization twice to verify idempotence. After conversion, the module-account name, account number, sequence, and balance are all preserved.
 
-Validation exécutée :
+Executed validation:
 
 ```bash
 go test -count=1 ./x/market/...
@@ -392,52 +404,54 @@ go test -count=1 ./app/upgrades/v15 ./x/tax/keeper ./x/treasury/...
 go test -count=1 ./...
 ```
 
-Toutes les suites du core passent. `INT-002` sera considéré comme fermé pour une version communautaire après revue et intégration du correctif.
+All core suites pass. `INT-002` should be considered closed for a community release after review and integration.
 
-#### INT-003 — Le handler d'upgrade v15 ne migrait pas l'état pré-MM2
+#### INT-003 — v15 Upgrade Handler Did Not Migrate Pre-MM2 State
 
-**Statut : FAIL**
-**Gravité : critique / P0**
-**Périmètre : activation sur une chaîne Terra Classic existante**
+**Initial status: FAIL**
 
-Lors de l'audit initial, le handler `app/upgrades/v15/upgrades.go` limitait en mémoire les swaps à `uusd`, ajoutait le méta-denom Oracle `UST` si nécessaire, puis lançait les migrations déclarées par les modules. Même avec la garantie du compte `market_accumulator` apportée par `INT-002`, il n'écrivait alors aucune des nouvelles clés de paramètres :
+**Severity: critical / P0**
 
-- `EpochLengthBlocks` ;
-- `SwapFeeBurnRate` et `SwapFeeCommunityRate` ;
-- `MaxOracleAgeSeconds` ;
-- `TWAPLookbackWindow` et `MaxTWAPDeviation` ;
-- `DailyCapFactor` ;
-- `TaxRedirectRate` dans Treasury.
+**Scope: activation on an existing Terra Classic chain**
 
-Dans `x/params`, `Subspace.Get` panique lorsque la clé n'existe pas. Une chaîne créée avant MM2 ne possède pas ces clés. Or chaque `EndBlock` appelle `ProcessEpochIfDue`, qui lit immédiatement `EpochLengthBlocks`. Le risque n'est donc pas une simple mauvaise valeur par défaut : le premier bloc suivant l'upgrade peut arrêter l'exécution de la chaîne.
+During the initial audit, `app/upgrades/v15/upgrades.go` limited swaps in memory to `uusd`, added the `UST` Oracle meta-denom when necessary, and ran module-declared migrations. Even with the `market_accumulator` guarantee added by `INT-002`, it did not write any of the new parameter keys:
 
-Même en supposant les clés présentes, ce handler initial ne remplaçait pas le spread de 100 % utilisé historiquement pour désactiver les swaps sur Columbus-5. Les valeurs par défaut du code audité ne correspondaient pas non plus au vote : spread 2 % au lieu de 0,35 %, burn des frais 0 % au lieu de 50 %, donc reliquat Oracle 100 % au lieu de 50 %. Enfin, aucune activation en deux étapes n'était implémentée.
+- `EpochLengthBlocks`;
+- `SwapFeeBurnRate` and `SwapFeeCommunityRate`;
+- `MaxOracleAgeSeconds`;
+- `TWAPLookbackWindow` and `MaxTWAPDeviation`;
+- `DailyCapFactor`;
+- `TaxRedirectRate` in Treasury.
 
-**Impact :** le chemin d'upgrade mainnet n'est pas exécutable en sécurité et le profil fonctionnel observé sur le devnet n'est obtenu que parce que le genesis local force explicitement les valeurs souhaitées.
+In `x/params`, `Subspace.Get` panics when a key is missing. A chain created before MM2 does not have these keys. Every `EndBlock` calls `ProcessEpochIfDue`, which immediately reads `EpochLengthBlocks`. The risk was therefore not merely an incorrect default: the first block after upgrade could halt chain execution.
 
-##### Re-test après correction locale du core
+Even if those keys were present, the initial handler did not replace the 100% spread historically used to disable swaps on Columbus-5. The audited code defaults also differed from the proposal: 2% spread instead of 0.35%, 0% fee burn instead of 50%, and therefore 100% of the remaining fee sent to Oracle instead of 50%. No two-stage activation was implemented.
 
-**Statut actualisé : RESOLVED LOCAL — PR EN ATTENTE**
+**Impact:** the mainnet upgrade path was not safely executable, and the functional devnet profile existed only because local genesis explicitly forced the intended values.
 
-Le handler v15 réalise désormais une migration idempotente qui :
+##### Retest After the Local Core Correction
 
-- garantit le compte module `market_accumulator` ;
-- conserve les anciennes valeurs `BasePool` et `PoolRecoveryPeriod` ;
-- remplace le spread historique par `0,35 %` ;
-- initialise l'époque à 30 jours, la répartition de frais 50 % burn / 50 % Oracle, la fraîcheur Oracle à 75 secondes, la fenêtre TWAP à 45 blocs, sa déviation maximale à 10 % et le plafond journalier à 10 % ;
-- initialise la redirection fiscale Treasury à 60 % ;
-- remplace le denom générique `stake` des dépôts de gouvernance ordinaires ou accélérés par `uluna`, sans changer leurs montants ni leurs seuils ;
-- inscrit un état Market persistant désactivé et ancre la première époque de collecte à la hauteur d'upgrade ;
-- conserve l'état et la hauteur d'origine si le handler est rejoué.
+**Current status: RESOLVED LOCAL — [DRAFT PR OPEN](https://github.com/Market-Module-2-0/core/pull/3)**
 
-Le processeur d'époque active ensuite les swaps uniquement après une époque complète et après transfert réussi de l'accumulateur vers des réserves Market contenant à la fois `uluna` et `uusd`. Avant cette frontière, toute transaction de swap retourne explicitement `market module is disabled`. L'état d'activation, l'attente initiale et la dernière hauteur d'époque sont inclus dans l'export/import du genesis.
+The v15 handler now performs an idempotent migration that:
 
-Les tests ajoutés couvrent deux niveaux :
+- guarantees the `market_accumulator` module account;
+- preserves legacy `BasePool` and `PoolRecoveryPeriod` values;
+- replaces the historical spread with `0.35%`;
+- initializes the 30-day epoch, 50% burn / 50% Oracle fee split, 75-second Oracle freshness, 45-block TWAP window, 10% maximum TWAP deviation, and 10% daily cap;
+- initializes Treasury tax redirection at 60%;
+- replaces the generic `stake` denom in regular or expedited governance deposits with `uluna` without changing amounts or thresholds;
+- writes persistent Market-disabled state and anchors the first collection epoch at upgrade height;
+- preserves the original state and height if the handler is replayed.
 
-1. une application en mémoire dont les sept nouvelles clés Market, la clé Treasury et les clés d'activation sont supprimées pour reproduire un état pré-MM2 ;
-2. la séquence hauteur 100 → hauteur 110 avec swap refusé pendant la collecte, alimentation des deux réserves, activation automatique, puis premier swap LUNC → USTC réussi.
+The epoch processor then activates swaps only after one complete epoch and after a successful accumulator transfer into Market reserves containing both `uluna` and `uusd`. Before that boundary, every swap returns `market module is disabled`. Activation state, initial waiting state, and the last epoch height are included in genesis export/import.
 
-Validation exécutée :
+The added tests cover two levels:
+
+1. an in-memory application where the seven new Market keys, the Treasury key, and activation keys are deleted to reproduce pre-MM2 state;
+2. the height 100 → height 110 sequence, with a rejected swap during collection, funding of both reserves, automatic activation, and then a successful first LUNC → USTC swap.
+
+Executed validation:
 
 ```bash
 go test -count=1 ./app/upgrades/v15
@@ -445,277 +459,285 @@ go test -count=1 ./x/market/...
 go test -count=1 ./...
 ```
 
-La prochaine validation d'exploitation devra encore exécuter le binaire sur une copie d'un snapshot pré-v15 représentatif, produire plusieurs blocs après upgrade et confirmer le flux fiscal réel pendant les 30 jours simulés. Cette étape ne remet pas en cause la fermeture locale du défaut déterministe, mais reste obligatoire avant une version communautaire.
+The next operational validation must still run the binary against a representative pre-v15 snapshot, produce several post-upgrade blocks, and confirm the real tax flow over a simulated 30-day collection period. This does not reopen the locally closed deterministic defect, but it remains mandatory before a community release.
 
-## Partie II — Améliorations réalisées
+## Part II — Implemented Improvements
 
-Cette partie distingue les améliorations déjà implémentées des écarts encore ouverts. Une amélioration reçoit un identifiant `IMP` lorsqu'elle ajoute ou renforce un mécanisme de conception, même si elle provient initialement de l'analyse d'un écart `GAP`.
+This part separates implemented improvements from gaps that remain open. An improvement receives an `IMP` identifier when it adds or strengthens a design mechanism, even when it originated from analysis of a `GAP`.
 
-### 9. Améliorations implémentées
+### 9. Implemented Improvements
 
-| ID | Amélioration réalisée | Résultat |
+| ID | Improvement | Result |
 |---|---|---|
-| IMP-001 | Recalcul adaptatif de `base_pool` et PRP avec un facteur de 7 % | Implémenté et testé |
-| IMP-002 | Prévalidation Oracle avant la rotation d'époque afin d'éviter une mutation partielle prévisible | Implémenté et testé |
-| IMP-003 | Plafond direct renforcé : frais inclus, baselines purgées et maximum de 10 % imposé | Implémenté et testé |
-| IMP-004 | Registre générique reliant denom bancaire, source de prix Oracle, TWAP et paire LUNC autorisée | Implémenté et testé, USTC seul actif de production |
-| IMP-005 | Auto-kill Oracle pondéré après 25 blocs sous 50 %, persistance et reprise contrôlée | Implémenté et testé localement ; chemin Oracle sain validé sur quatre nœuds, panne E2E restante |
-| IMP-006 | TWAP pondéré par durée sur 45 blocs et fermeture sans historique complet | Implémenté et testé localement |
-| IMP-007 | Réutilisation du spread historique comme frein de gouvernance, correction du dépôt accéléré et validation fermeture/réouverture | Implémenté et testé localement |
+| IMP-001 | Adaptive recalculation of `base_pool` and PRP with a 7% factor | Implemented and tested |
+| IMP-002 | Oracle prevalidation before epoch rotation to avoid predictable partial mutation | Implemented and tested |
+| IMP-003 | Stronger direct cap: fees included, baselines cleared, and absolute 10% maximum enforced | Implemented and tested |
+| IMP-004 | Generic registry connecting bank denom, Oracle price source, TWAP, and authorized LUNC pair | Implemented and tested; only USTC active in production |
+| IMP-005 | Voting-power-weighted Oracle auto-halt after 25 blocks below 50%, persistence, and controlled recovery | Implemented and tested locally; healthy Oracle path validated on four nodes, outage E2E pending |
+| IMP-006 | Duration-weighted 45-block TWAP and closed bootstrap without complete history | Implemented and tested locally |
+| IMP-007 | Reuse of historical spread as governance brake, expedited deposit correction, and closure/reopening validation | Implemented and tested locally |
 
-#### IMP-001 à IMP-003 — Résolution et durcissement de GAP-001
+#### IMP-001 to IMP-003 — GAP-001 Resolution and Hardening
 
-**Statut initial : ABSENT**
-**Statut actualisé : RESOLVED LOCAL — 7 % ADAPTATIF / 10 % CAP STRICT**
-**Gravité initiale : élevée / P1**
+**Initial status: ABSENT**
 
-##### Constat initial
+**Current status: RESOLVED LOCAL — 7% ADAPTIVE / 10% STRICT CAP**
 
-La proposition impose un recalcul par époque selon le solde du nouveau pool, la supply LUNC, le facteur de burst et deux plafonds. Le code initial brûlait le pool, transférait l'accumulateur et renouvelait la baseline du cap, mais laissait `BasePool` et `PoolRecoveryPeriod` statiques.
+**Initial severity: high / P1**
 
-##### Solution implémentée
+##### Initial Finding
 
-Le processeur d'époque applique maintenant le modèle suivant, dans les unités micro-SDR historiques du module Market :
+The proposal requires an epoch recalculation based on the new pool balance, LUNC supply, the burst factor, and two caps. The initial code burned the pool, transferred the accumulator, and refreshed the cap baseline, but left `BasePool` and `PoolRecoveryPeriod` static.
 
-```text
-PRP = max(14 400, ceil(14 400 × supply LUNC après burn / 1T LUNC))
-cap journalier adaptatif souhaité = valeur SDR du nouveau pool LUNC × F, avec F = 0,07
-base_pool brut = cap journalier souhaité × PRP / (2 × 14 400)
-base_pool = min(base_pool brut, 0,00010 × valeur SDR de la supply, 5 000 000 SDR)
-```
+##### Implemented Solution
 
-Le calcul est effectué avant toute mutation de l'époque. Il utilise le solde LUNC de l'accumulateur, la supply qui subsistera après destruction de l'ancien pool et un taux LUNC/SDR Oracle positif et récent. Si ce taux manque ou est périmé, le burn, le refill et la hauteur d'époque restent inchangés ; le même passage d'époque est retenté au bloc suivant. Après application, le delta du pool virtuel repart à l'équilibre afin qu'une réduction de `base_pool` ne conserve pas un ancien déséquilibre incompatible.
-
-Le plafond journalier direct n'est pas supprimé. Il reste la couche de sûreté stricte par actif physique, tandis que `base_pool` et PRP régulent progressivement la courbe de spread et sa récupération. Le calcul du plafond direct inclut désormais la totalité de la sortie du compte Market — montant reçu par l'utilisateur et frais —, initialise une baseline si un actif a été alimenté hors frontière d'époque et supprime les anciennes baselines et consommations lors de la rotation.
-
-Les tests ajoutés valident :
-
-- le facteur par défaut de 7 % avec 600 millions de LUNC valant 24 000 SDR et une supply de 6,5 billions de LUNC : PRP de 93 600 blocs et `base_pool` de 5 460 SDR ;
-- la contraction à 1 billion de LUNC : PRP de 14 400 blocs et `base_pool` de 840 SDR ;
-- le plafond proportionnel à la valeur de la supply et le plafond absolu de 5 millions de SDR ;
-- le report sans mutation d'une époque privée d'un prix Oracle frais, puis sa réussite après publication du prix ;
-- l'application des paramètres à la première activation et l'exécution du premier swap ;
-- la comptabilisation des frais dans le plafond direct, la purge des compteurs d'une ancienne époque et le rejet de toute configuration dépassant le plafond absolu de 10 %.
-
-La proposition présente une incohérence rédactionnelle : elle définit explicitement `F = 0,07`, annonce « au plus 10 % », puis utilise `F = 0,1` dans son exemple. L'implémentation locale retient la valeur par défaut explicite de 7 % pour dimensionner `base_pool`. Le taux de 10 % reste uniquement le plafond journalier strict par actif. Un test de régression impose cette séparation afin qu'une modification du plafond strict ne change pas silencieusement le facteur adaptatif. Il reste souhaitable que l'exemple de la proposition soit clarifié avant le mainnet.
-
-#### IMP-004 — Généralisation des actifs Market
-
-##### Constat initial
-
-Le premier code MM2 traitait `uusd` et le méta-denom `UST` par des conditions particulières réparties entre la validation des paires, le calcul du taux, le TWAP, l'activation et l'upgrade. Ajouter un autre actif de cette manière aurait dupliqué les contrôles et multiplié les chemins à corriger.
-
-##### Solution implémentée
-
-Une définition commune `MarketAssetConfig` relie maintenant :
-
-- le denom bancaire réellement détenu par le pool ;
-- le denom Oracle qui transporte le prix de marché ;
-- le mode de conversion du prix vers l'unité historique « actif par LUNC ».
-
-La validation des paires, la résolution des prix, la collecte TWAP, la condition de liquidité initiale, l'ajout des cibles Oracle lors de l'upgrade et le contrôle de quorum de GAP-002 consomment tous ce même registre déterministe. Aucune condition USTC supplémentaire n'a été introduite pour l'auto-kill.
-
-La configuration de production contient toujours uniquement `uluna ↔ uusd`. Un méta-denom EUTC fictif a été utilisé dans les tests pour démontrer, sans l'activer, que le même code :
-
-- calcule les deux directions à partir de prix USD indépendants ;
-- exécute un swap complet depuis une réserve physique sans hausse de supply ;
-- collecte les entrées TWAP requises par l'actif configuré ;
-- accepte cette réserve pour une première activation ;
-- continue de refuser les swaps stable-vers-stable et les actifs absents du registre.
-
-L'ajout réel d'EUTC ou d'un autre actif reste une décision de chaîne : il nécessitera un upgrade coordonné, un denom Oracle définitif, des feeders compatibles, un quorum suffisant, une réserve physique et une campagne de tests dédiée. La généralisation supprime la duplication de code, mais ne contourne pas ces prérequis économiques et opérationnels.
-
-#### IMP-005 — Résolution de GAP-002 : auto-kill Oracle pondéré
-
-**Statut initial : ABSENT**
-**Statut actualisé : RESOLVED LOCAL — BASELINE MULTI-VALIDATEUR PASS**
-**Gravité initiale : élevée / P1**
-
-##### Constat initial
-
-L'état persistant d'activation introduit par INT-003 permettait de refuser les swaps, mais aucune donnée de puissance ne traversait le hook Oracle et aucun compteur ne mesurait 25 blocs consécutifs sous 50 %. Le retrait natif d'un taux invalide faisait déjà échouer les swaps, sans toutefois implémenter la durée, la persistance de l'arrêt ni la reprise définies par la proposition.
-
-##### Solution implémentée
-
-Le module Oracle transmet désormais au Market, après chaque tally, une observation déterministe pour chaque cible de vote : denom, puissance ayant soumis un prix positif et puissance totale des validateurs actifs. Cette mesure est produite on-chain avant que le tally natif retire les denoms n'atteignant pas son seuil. Elle ne dépend donc ni du feeder officiel, ni du feeder StrathCole, ni du nombre de processus en fonctionnement : seule la puissance de vote des validateurs compte.
-
-Pour la paire de production LUNC/USTC, le registre d'actifs impose simultanément le quorum des deux entrées réellement nécessaires au prix :
-
-- `uusd`, prix USD/LUNC ;
-- `UST`, prix USD/USTC.
-
-Après chaque période Oracle, un compteur persistant par denom est incrémenté du nombre de blocs de la période si la puissance est strictement inférieure à 50 %. Une puissance exactement égale à 50 % est suffisante. Une période saine remet immédiatement le compteur du denom à zéro. Dès qu'un compteur atteint 25 blocs, le Market passe dans l'état persistant `oracle_halted` et refuse les swaps. Le compteur est plafonné à 25 afin d'éviter une croissance inutile.
-
-L'arrêt est levé uniquement lorsqu'un même tally montre un quorum suffisant pour toutes les entrées exigées par le registre. Le retour du quorum ne réactive effectivement les swaps que si l'état d'activation de base est lui-même ouvert ; il ne peut donc contourner ni la première activation post-upgrade, ni un futur arrêt de gouvernance. Réciproquement, une frontière d'époque ne peut pas activer le Market tant que `oracle_halted` est vrai. Si cette situation survient à la toute première frontière, l'époque n'est ni consommée ni déplacée : elle est retraitée dès la récupération Oracle, sans imposer 30 jours d'attente supplémentaires. Les transitions d'arrêt et de reprise émettent des événements dédiés avec hauteur, denom fautif et puissances observées.
-
-L'état exporté contient le motif d'arrêt et les compteurs par denom, triés de manière déterministe. L'import restitue donc exactement une panne en cours et sa durée. La migration v15 initialise explicitement le nouvel état sans réinitialiser une installation déjà migrée.
-
-Les tests ajoutés couvrent :
-
-- cinq tallies successifs de 5 blocs à 49 % et l'arrêt uniquement au 25e bloc ;
-- la limite exacte de 50 % et la remise à zéro d'un compteur antérieur ;
-- un denom complètement absent du résultat Oracle ;
-- le maintien de l'arrêt lorsqu'un seul des deux prix récupère son quorum ;
-- la reprise lorsque tous les prix requis sont sains ;
-- l'interaction dans les deux sens avec la première activation différée, la reprise de sa frontière d'époque et un arrêt indépendant ;
-- la persistance export/import ;
-- une configuration générique EUTC fictive, sans activation de cet actif en production ;
-- le passage réel des puissances pondérées depuis l'EndBlocker Oracle vers le hook Market avec trois validateurs de même puissance.
-
-Cette correction ferme l'écart déterministe dans le code. Le harnais multi-validateur exécute maintenant les votes Oracle sains de quatre validateurs et des swaps bidirectionnels. Il faut encore y reproduire l'arrêt et la reprise avec des puissances inégales avant une proposition mainnet.
-
-#### IMP-006 — Résolution de GAP-003 : véritable TWAP et amorçage fermé
-
-**Statut initial : PARTIEL**
-**Statut actualisé : RESOLVED LOCAL — TESTS PASS**
-**Gravité initiale : élevée / P1**
-
-##### Constat initial
-
-Chaque observation Oracle était déjà stockée avec sa hauteur, mais `ComputeTWAP` ignorait cette information et calculait une moyenne arithmétique. Un prix resté valable 40 blocs avait donc le même poids qu'un prix observé pendant 5 blocs. En cas de tallies irréguliers ou manqués, le résultat ne représentait plus le prix réellement en vigueur pendant la fenêtre.
-
-Par exemple, avec un prix de `1` pendant 40 blocs puis de `2` pendant 5 blocs :
+The epoch processor now applies the following model using the Market module's historical micro-SDR units:
 
 ```text
-moyenne arithmétique précédente = (1 + 2) / 2 = 1,5
-TWAP réel                     = (1 × 40 + 2 × 5) / 45 = 1,111…
+PRP = max(14,400, ceil(14,400 × LUNC supply after burn / 1T LUNC))
+desired adaptive daily cap = SDR value of the new LUNC pool × F, where F = 0.07
+raw base_pool = desired daily cap × PRP / (2 × 14,400)
+base_pool = min(raw base_pool, 0.00010 × SDR value of supply, 5,000,000 SDR)
 ```
 
-Le second défaut était plus direct : si aucun historique n'était disponible, le gestionnaire de swap ignorait volontairement le contrôle TWAP et autorisait la transaction. Un Market fraîchement activé, restauré sans historique ou privé de données suffisantes bénéficiait donc de moins de protection que le régime normal.
+The calculation runs before any epoch mutation. It uses the accumulator's LUNC balance, the supply that will remain after the old pool is burned, and a positive, recent LUNC/SDR Oracle rate. If that rate is missing or stale, the burn, refill, and epoch height remain unchanged; the same epoch boundary is retried on the next block. After application, the virtual pool delta resets to equilibrium so a reduced `base_pool` does not retain an incompatible prior imbalance.
 
-##### Solution implémentée
+The direct daily cap is not removed. It remains the strict safety layer for each physical asset, while `base_pool` and PRP progressively regulate the spread curve and its recovery. Direct-cap calculation now includes the complete output from the Market account—user payout plus fee—creates a baseline when an asset is funded outside an epoch boundary, and removes old baselines and usage during rotation.
 
-Le calcul traite maintenant les observations comme une fonction en escalier sur l'intervalle exact :
+The added tests validate:
+
+- the default 7% factor with 600 million LUNC worth 24,000 SDR and a 6.5 trillion LUNC supply: a 93,600-block PRP and a `base_pool` of 5,460 SDR;
+- contraction to a 1 trillion LUNC supply: a 14,400-block PRP and a `base_pool` of 840 SDR;
+- the supply-value proportional cap and the absolute 5 million SDR cap;
+- deferral without mutation when an epoch lacks a fresh Oracle price, followed by success after price publication;
+- parameter application during first activation and execution of the first swap;
+- fee inclusion in the direct cap, old-epoch counter clearing, and rejection of any configuration above the absolute 10% maximum.
+
+The proposal contains a drafting inconsistency: it explicitly defines `F = 0.07`, states “at most 10%,” then uses `F = 0.1` in its example. The local implementation uses the explicit 7% default to size `base_pool`. The 10% value remains only the strict daily per-asset cap. A regression test enforces this separation so changing the strict cap cannot silently alter the adaptive factor. The proposal example should be clarified before mainnet.
+
+#### IMP-004 — Generalized Market Assets
+
+##### Initial Finding
+
+The first MM2 code handled `uusd` and the `UST` meta-denom through special conditions distributed across pair validation, rate calculation, TWAP, activation, and upgrade logic. Adding another asset in the same manner would duplicate checks and multiply the paths requiring future fixes.
+
+##### Implemented Solution
+
+A shared `MarketAssetConfig` definition now connects:
+
+- the bank denom physically held by the pool;
+- the Oracle denom carrying the market price;
+- the price-conversion mode into the historical “asset units per LUNC” format.
+
+Pair validation, price resolution, TWAP collection, initial-liquidity conditions, Oracle target insertion during upgrade, and the GAP-002 quorum check all consume the same deterministic registry. No additional USTC-specific condition was added for the auto-halt.
+
+Production configuration still contains only `uluna ↔ uusd`. Tests use a fictional EUTC meta-denom to demonstrate, without activating it, that the same code:
+
+- calculates both directions from independent USD prices;
+- executes a complete swap from physical reserves without increasing supply;
+- collects the TWAP inputs required by the configured asset;
+- accepts that reserve for first activation;
+- continues to reject stable-to-stable swaps and assets absent from the registry.
+
+Adding EUTC or another real asset remains a chain-level decision. It will require a coordinated upgrade, a final Oracle denom, compatible feeders, sufficient quorum, physical reserves, and a dedicated test campaign. Generalization removes code duplication but does not bypass these economic and operational prerequisites.
+
+#### IMP-005 — GAP-002 Resolution: Voting-Power-Weighted Oracle Auto-Halt
+
+**Initial status: ABSENT**
+
+**Current status: RESOLVED LOCAL — MULTI-VALIDATOR BASELINE PASS**
+
+**Initial severity: high / P1**
+
+##### Initial Finding
+
+The persistent activation state introduced by INT-003 could reject swaps, but no voting-power data crossed the Oracle hook and no counter measured 25 consecutive blocks below 50%. Native removal of an invalid rate already caused swaps to fail, but did not implement the proposal's duration, persistent halt, or recovery semantics.
+
+##### Implemented Solution
+
+After each tally, Oracle now sends Market a deterministic observation for every voting target: denom, voting power that submitted a positive price, and total active-validator power. This measurement is produced on-chain before the native tally removes denoms that miss its threshold. It therefore depends on neither the official feeder nor the StrathCole feeder, nor on the number of feeder processes running; only validator voting power matters.
+
+For the production LUNC/USTC pair, the asset registry simultaneously requires quorum for both price inputs actually used:
+
+- `uusd`, USD/LUNC price;
+- `UST`, USD/USTC price.
+
+After each Oracle period, a persistent per-denom counter increases by the period's block count when voting power is strictly below 50%. Exactly 50% is sufficient. A healthy period immediately resets that denom's counter. When any counter reaches 25 blocks, Market enters persistent `oracle_halted` state and rejects swaps. The counter is capped at 25 to avoid unnecessary growth.
+
+The halt clears only when one tally shows sufficient quorum for every registry-required input. Quorum recovery only reopens swaps when the base activation state is also open; it cannot bypass first post-upgrade activation or an independent governance brake. Conversely, an epoch boundary cannot activate Market while `oracle_halted` is true. If this occurs at the first boundary, the epoch is neither consumed nor moved: it is retried after Oracle recovery without imposing another 30-day wait. Halt and recovery transitions emit dedicated events containing height, failing denom, and observed power.
+
+Exported state contains the halt reason and per-denom counters in deterministic order. Import therefore restores an outage and its elapsed duration exactly. The v15 migration explicitly initializes the new state without resetting an already migrated installation.
+
+The added tests cover:
+
+- five successive 5-block tallies at 49%, with halt only on block 25;
+- the exact 50% boundary and reset of an earlier counter;
+- a denom completely absent from the Oracle result;
+- continued halt when only one of the two prices recovers;
+- recovery when every required price is healthy;
+- two-way interaction with deferred first activation, retry of its epoch boundary, and an independent disable state;
+- export/import persistence;
+- a generic fictional EUTC configuration without production activation;
+- real transmission of weighted power from the Oracle EndBlocker into the Market hook with three equal-power validators.
+
+This correction closes the deterministic code gap. The multi-validator harness now executes healthy Oracle votes from four validators and bidirectional swaps. Halt and recovery still need to be reproduced with unequal voting powers before a mainnet proposal.
+
+#### IMP-006 — GAP-003 Resolution: True TWAP and Closed Bootstrap
+
+**Initial status: PARTIAL**
+
+**Current status: RESOLVED LOCAL — TESTS PASS**
+
+**Initial severity: high / P1**
+
+##### Initial Finding
+
+Every Oracle observation was already stored with its height, but `ComputeTWAP` ignored that information and calculated an arithmetic mean. A price valid for 40 blocks therefore had the same weight as a price observed for 5 blocks. With irregular or missed tallies, the result did not represent the price actually in effect during the window.
+
+For example, with a price of `1` for 40 blocks followed by `2` for 5 blocks:
 
 ```text
-[hauteur actuelle − 45, hauteur actuelle)
+previous arithmetic mean = (1 + 2) / 2 = 1.5
+true TWAP                = (1 × 40 + 2 × 5) / 45 = 1.111…
 ```
 
-Pour chaque segment, le prix est multiplié par le nombre exact de blocs pendant lesquels il est resté valable. La somme est ensuite divisée par 45. Une observation publiée à la hauteur actuelle n'a donc aucun poids rétroactif ; elle commencera à compter au bloc suivant.
+The second defect was more direct: when no history existed, the swap handler deliberately skipped the TWAP check and allowed the transaction. A newly activated Market, a restoration without history, or a period with insufficient observations therefore had less protection than normal operation.
 
-Lors du nettoyage du stockage, le Market conserve aussi le dernier prix situé à la frontière ou avant celle-ci. Cette observation est indispensable pour connaître le prix en vigueur au début de la fenêtre, même si le tally précédent est plus ancien en raison d'une irrégularité.
+##### Implemented Solution
 
-La présence d'au moins un snapshot ne suffit plus. Chaque entrée Oracle nécessaire à la paire doit posséder une observation située à la frontière de la fenêtre ou avant elle. Pour LUNC/USTC, cette règle s'applique séparément à `uusd` et `UST`. Si une seule entrée ne couvre que 44 blocs, le swap retourne l'erreur Market 11, `complete TWAP history is not available`, avant toute mutation du pool ou des soldes.
+The calculation now treats observations as a step function over the exact interval:
 
-La première activation post-upgrade dispose normalement d'une époque complète pour accumuler cet historique. Dans tous les autres cas, le comportement est fermé par défaut : après une restauration ne contenant pas les snapshots, les swaps attendent simplement 45 blocs d'observations avant de reprendre. Un redémarrage normal du même stockage conserve les snapshots et ne provoque pas cette attente.
+```text
+[current height − 45, current height)
+```
 
-##### Tests de régression
+For every segment, price is multiplied by the exact number of blocks for which it remained active. The sum is divided by 45. An observation published at the current height therefore has no retroactive weight and begins contributing on the next block.
 
-Les tests ajoutés ou adaptés vérifient :
+Storage pruning also retains the last price at or before the boundary. This observation is required to know the price active at the start of the window, even when the prior tally is older because of irregular voting.
 
-- le résultat exact `50 / 45` pour les durées irrégulières 40 blocs à `1` puis 5 blocs à `2` ;
-- la conservation du snapshot antérieur à la frontière lors du nettoyage ;
-- le refus d'un historique de seulement 44 blocs et son acceptation au 45e bloc ;
-- le refus atomique d'un swap lorsque `UST` couvre 45 blocs mais `uusd` seulement 44 ;
-- la réussite du même swap un bloc plus tard, lorsque les deux fenêtres sont complètes ;
-- les déviations supérieures et inférieures à 10 % ;
-- les chemins de swap natif, `SwapSend`, Wasm, No-Mint, plafond journalier, première activation et actif générique.
+The presence of one snapshot is no longer sufficient. Every Oracle input required by the pair must have an observation at or before the window boundary. For LUNC/USTC, the rule applies separately to `uusd` and `UST`. If one input covers only 44 blocks, the swap returns Market error 11, `complete TWAP history is not available`, before any pool or balance mutation.
 
-#### IMP-007 — Résolution de GAP-004 : frein de gouvernance existant et voie accélérée utilisable
+The first post-upgrade activation normally has a complete epoch in which to build this history. In every other case, behavior is closed by default: after a restoration without snapshots, swaps wait for 45 blocks of observations before resuming. A normal restart from the same storage preserves snapshots and does not cause this delay.
 
-**Statut initial : PARTIEL, PUIS REQUALIFIÉ**
-**Statut actualisé : RESOLVED LOCAL — TESTS PASS**
-**Gravité initiale : élevée / P1**
+##### Regression Tests
 
-##### Constat initial
+Added or updated tests verify:
 
-L'analyse initiale cherchait un booléen ou une commande dédiée permettant à la gouvernance d'arrêter le Market. Ce nouvel interrupteur n'est pas nécessaire. Le paramètre existant `MinStabilitySpread` est déjà enregistré dans le sous-espace `market` et modifiable par la route de gouvernance des changements de paramètres. Les forks historiques de l'application l'ont réglé à `1`, soit 100 %, précisément pour neutraliser les swaps. Une requête sur l'état Columbus-5 du 8 août 2026 a également retourné cette valeur.
+- exact result `50 / 45` for irregular durations of 40 blocks at `1` and 5 blocks at `2`;
+- retention of the snapshot before the window boundary during pruning;
+- rejection with only 44 blocks of history and acceptance at block 45;
+- atomic swap rejection when `UST` covers 45 blocks but `uusd` covers only 44;
+- success of the same swap one block later, when both windows are complete;
+- deviations above and below 10%;
+- native swap, `SwapSend`, Wasm, No-Mint, daily-cap, first-activation, and generic-asset paths.
 
-À 100 %, le frais calculé est égal à la sortie brute. La sortie nette du trader devient donc nulle et le message échoue avec `zero swap coin`. Remettre le spread approuvé à `0,0035` réouvre le chemin de swap, sous réserve que l'activation de base, l'Oracle, le TWAP, le plafond et la liquidité soient eux aussi valides. Ce frein est distinct de l'auto-kill Oracle et de la première activation : aucun de ces mécanismes ne peut rouvrir l'un des autres.
+#### IMP-007 — GAP-004 Resolution: Existing Governance Brake and Usable Expedited Path
 
-Le contrôle a toutefois révélé un défaut de configuration dans la gouvernance accélérée. Le seuil existe à `0,667` et sa période est plus courte, mais le dépôt minimal accéléré hérité du SDK était libellé en `stake`, tandis que le genesis personnalisé ne convertissait que le dépôt ordinaire en `uluna`. Une proposition accélérée ne pouvait donc pas être financée avec le token natif de Terra Classic.
+**Initial status: PARTIAL, THEN RECLASSIFIED**
 
-##### Solution implémentée
+**Current status: RESOLVED LOCAL — TESTS PASS**
 
-Aucun nouvel état d'arrêt n'a été ajouté au Market. La solution conserve le mécanisme historique afin d'éviter deux sources de vérité concurrentes :
+**Initial severity: high / P1**
 
-- `MinStabilitySpread = 1` ferme les swaps ;
-- `MinStabilitySpread = 0,0035` rétablit le spread MM2 approuvé ;
-- la validation de la sortie nulle, des frais et de la liquidité est maintenant exécutée avant toute modification du delta du pool ou des soldes ;
-- le genesis de gouvernance utilise `uluna` pour les dépôts ordinaires et accélérés ;
-- la migration v15 convertit un éventuel denom SDK `stake` en `uluna` sur les deux chemins, tout en conservant les montants, les périodes et le seuil accéléré `0,667`.
+##### Initial Finding
 
-##### Tests de régression et preuves réseau
+The initial analysis looked for a dedicated boolean or command allowing governance to stop Market. A new switch is unnecessary. The existing `MinStabilitySpread` parameter is already registered in the `market` subspace and can be modified through parameter-change governance. Historical application forks set it to `1`, or 100%, specifically to neutralize swaps. A query of Columbus-5 state on August 8, 2026 also returned this value.
 
-Les tests Keeper ferment puis rouvrent successivement :
+At 100%, the calculated fee equals the gross output. The trader's net output becomes zero, and the message fails with `zero swap coin`. Restoring the approved spread to `0.0035` reopens the swap path, provided base activation, Oracle, TWAP, cap, and liquidity conditions are also valid. This brake is independent from Oracle auto-halt and first activation; none of these mechanisms can reopen another.
 
-- un swap LUNC vers USTC ;
-- un swap USTC vers LUNC ;
-- un `SwapSend` LUNC vers USTC.
+The review did reveal a configuration defect in expedited governance. The `0.667` threshold and shorter period existed, but the SDK-derived expedited minimum deposit used `stake`, while custom genesis converted only the regular deposit to `uluna`. An expedited proposal could therefore not be funded with Terra Classic's native token.
 
-Dans l'état fermé, le trader, le destinataire, le compte Market et `TerraPoolDelta` restent strictement inchangés. Le même message réussit après retour à `0,0035`. Un export/import de genesis conserve également la valeur fermée à `1`.
+##### Implemented Solution
 
-Un test d'intégration de l'application complète soumet ensuite deux véritables propositions accélérées, finance chacune avec le dépôt requis en `uluna`, enregistre un vote pondéré et exécute le tally : la première ferme le Market et la seconde le réouvre. Il vérifie le seuil `0,667`, le statut `PASSED` et la modification du paramètre uniquement après adoption. Les tests de migration prouvent séparément la conversion idempotente du denom de dépôt.
+No additional Market halt state was introduced. The solution keeps the historical mechanism to avoid competing sources of truth:
 
-Sur le devnet persistant, deux propositions ordinaires ont validé le chemin réseau complet de modification du paramètre :
+- `MinStabilitySpread = 1` closes swaps;
+- `MinStabilitySpread = 0.0035` restores the approved MM2 spread;
+- zero-output, fee, and liquidity validation now occurs before any pool-delta or balance mutation;
+- governance genesis uses `uluna` for regular and expedited deposits;
+- the v15 migration converts a possible SDK `stake` denom to `uluna` on both paths while preserving amounts, periods, and the `0.667` expedited threshold.
 
-| Proposition | Action | Résultat | Transaction de soumission |
+##### Regression Tests and Network Evidence
+
+Keeper tests successively close and reopen:
+
+- a LUNC-to-USTC swap;
+- a USTC-to-LUNC swap;
+- a LUNC-to-USTC `SwapSend`.
+
+While closed, trader, receiver, Market account, and `TerraPoolDelta` remain strictly unchanged. The same message succeeds after returning to `0.0035`. A genesis export/import also preserves the closed value of `1`.
+
+A full-application integration test then submits two real expedited proposals, funds each with the required `uluna` deposit, records a weighted vote, and executes tallying: the first closes Market and the second reopens it. It verifies the `0.667` threshold, `PASSED` status, and parameter mutation only after adoption. Migration tests separately prove idempotent deposit-denom conversion.
+
+On the persistent devnet, two regular proposals validated the complete network path for parameter changes:
+
+| Proposal | Action | Result | Submission transaction |
 |---|---|---|---|
-| 1 | passage de `0,0035` à `1` | `PASSED`, puissance `YES` : `900 000 000 000` | `344A0A20…90DB` |
-| 2 | retour de `1` à `0,0035` | `PASSED`, puissance `YES` : `900 000 000 000` | `FEAEC621…E614` |
+| 1 | `0.0035` to `1` | `PASSED`, `YES` power: `900,000,000,000` | `344A0A20…90DB` |
+| 2 | `1` to `0.0035` | `PASSED`, `YES` power: `900,000,000,000` | `FEAEC621…E614` |
 
-Le nœud a été redémarré après la proposition 2 et a conservé `0,0035`. La voie accélérée n'a pas été rejouée sur ce volume ancien, car son état avait précisément conservé le dépôt erroné en `stake` ; elle est couverte par le test d'intégration complet et par la migration v15 corrigée. Une répétition multi-validateur devra encore vérifier la frontière exacte du tally : `0,667` est la valeur SDK employée pour représenter la règle de deux tiers.
+The node was restarted after proposal 2 and retained `0.0035`. The expedited path was not replayed on this older volume because its state specifically retained the incorrect `stake` deposit; it is covered by the full integration test and the corrected v15 migration. A multi-validator repetition must still verify the exact tally boundary: `0.667` is the SDK value used to represent the two-thirds rule.
 
-### 10. Améliorations restant à réaliser
+### 10. Remaining Improvements
 
-Les écarts de conception GAP-001 à GAP-004 sont tous traités localement. Il ne reste pas de mécanisme MM2 identifié comme absent dans cette série. Les limites encore ouvertes concernent la publication, l'upgrade depuis un snapshot réel, le harnais multi-validateur et la validation économique longue décrits ci-dessous.
+Design gaps GAP-001 through GAP-004 are all addressed locally. No identified MM2 mechanism remains absent in this series. Open limitations concern publication, upgrade from a real snapshot, multi-validator validation, and long-running economic validation as described below.
 
-### 11. Limites de la campagne
+### 11. Campaign Limitations
 
-Le harnais multi-validateur de base est corrigé. Les points suivants doivent encore être exercés en étendant ses scénarios ou dans un environnement public :
+The base multi-validator harness is repaired. The following points still need to be exercised by extending its scenarios or using a public environment:
 
-1. revalidation E2E de l'auto-kill Oracle avec au moins quatre validateurs de puissances inégales et pertes successives de 25 blocs ;
-2. revalidation en réseau du TWAP avec votes irréguliers et changement de majorité ;
-3. répétition de l'upgrade corrigé depuis un snapshot pré-v15 réaliste, puis activation à l'époque suivante ;
-4. charge réellement parallèle depuis plusieurs comptes et plusieurs proposers ;
-5. campagne économique longue couvrant plusieurs époques de production simulées.
-6. fermeture et réouverture accélérées sur plusieurs validateurs, avec contrôle de la frontière du seuil `0,667`.
+1. E2E revalidation of the Oracle auto-halt with at least four unequal-power validators and successive 25-block outages;
+2. network TWAP revalidation with irregular votes and a changing majority;
+3. repetition of the corrected upgrade from a realistic pre-v15 snapshot, followed by activation at the next epoch;
+4. truly parallel load from multiple accounts and multiple proposers;
+5. a long economic campaign spanning several simulated production epochs;
+6. expedited closure and reopening across multiple validators, including the exact `0.667` threshold boundary.
 
-Ces tests restants ne changent pas le verdict courant : les défauts P0 sont déjà reproductibles ou déterministes par lecture du chemin d'exécution.
+These remaining tests do not change the current verdict. The P0 defects were reproducible or deterministic from the execution path and are now corrected locally.
 
-### 12. Recommandations priorisées
+### 12. Prioritized Recommendations
 
-#### P0 — avant tout test communautaire
+#### P0 — Before Any Community Test
 
-1. Publier le correctif validé du feeder pour `UST` (`USD par USTC`) et conserver le test d'intégration réciproque avec le core.
-2. Publier le correctif validé d'`InitGenesis` et de l'upgrade garantissant un véritable `ModuleAccount` `market_accumulator`, y compris en cas de collision d'adresse.
-3. Publier la migration v15 idempotente validée localement et répéter l'essai sur un snapshot pré-v15 représentatif.
-4. Conserver les tests bloquants qui imposent MM désactivé pendant une époque complète et deux réserves alimentées avant la première activation.
+1. Review and merge the feeder correction for `UST` (`USD per USTC`), then retain reciprocal integration coverage with the core.
+2. Review and merge the `InitGenesis` and upgrade correction that guarantees a real `market_accumulator` `ModuleAccount`, including address collisions.
+3. Review and merge the locally validated idempotent v15 migration, then repeat it against a representative pre-v15 snapshot.
+4. Keep the blocking tests that require Market to remain disabled for a complete epoch and both reserves to be funded before first activation.
 
-#### P1 — avant proposition mainnet
+#### P1 — Before a Mainnet Proposal
 
-1. Publier l'implémentation locale de `base_pool`/PRP avec la séparation 7 % adaptatif / 10 % plafond strict et la rejouer sur plusieurs époques.
-2. Publier l'auto-kill quorum local de 25 blocs, puis valider son arrêt persistant et son réarmement sur un réseau multi-validateur.
-3. Publier le TWAP pondéré local et confirmer en réseau le blocage pendant l'amorçage puis la reprise au 45e bloc.
-4. Publier la normalisation du dépôt accéléré en `uluna`, puis rejouer la fermeture et la réouverture par `MinStabilitySpread` sur le harnais multi-validateur.
-5. Étendre le harnais multi-validateur réparé avec des assertions bloquantes pour les pannes de quorum et les transitions de gouvernance.
+1. Review the local `base_pool`/PRP implementation with its 7% adaptive / 10% strict-cap separation, then replay it across several epochs.
+2. Review the local 25-block quorum auto-halt, then validate persistent halt and recovery on a multi-validator network.
+3. Review the local weighted TWAP, then confirm network blocking during bootstrap and recovery on block 45.
+4. Review the expedited-deposit normalization to `uluna`, then replay closure and reopening through `MinStabilitySpread` on the multi-validator harness.
+5. Extend the repaired multi-validator harness with blocking assertions for quorum outages and governance transitions.
 
-#### P2 — qualité d'exploitation
+#### P2 — Operational Quality
 
-1. Fournir des scripts reproductibles de charge multi-comptes, d'export/import et de collecte des preuves.
-2. Documenter clairement les valeurs mainnet, testnet et devnet pour éviter qu'une époque de 100 blocs ne soit réutilisée hors local.
+1. Provide reproducible scripts for multi-account load, export/import, and evidence collection.
+2. Clearly document mainnet, testnet, and devnet values so a 100-block epoch cannot be reused outside local testing.
 
-### 13. Critères de reprise de la validation
+### 13. Validation Resumption Criteria
 
-Une nouvelle campagne pourra conclure « GO testnet communautaire » lorsque :
+A future campaign may conclude “GO for community testnet” when:
 
-- les trois P0 possèdent chacun un test de régression ; leurs correctifs locaux doivent être revus et publiés ;
-- un upgrade pré-v15 produit des blocs, taxes et swaps sans panic avec MM initialement désactivé ;
-- les cotations LUNC/USTC correspondent aux deux prix USD bruts dans les deux sens ;
-- le réseau multi-validateur démontre arrêt, persistance et reprise sous les seuils de quorum ;
-- le réseau multi-validateur démontre une fermeture accélérée à 100 %, sa persistance et une réouverture à 0,35 % avec dépôts `uluna` ;
-- la séparation 7 % adaptatif / 10 % plafond strict est documentée, l'adaptation de liquidité satisfait les bornes de la proposition sur plusieurs époques et le TWAP est réellement pondéré.
+- each of the three P0 items has a regression test and its correction has been reviewed and published;
+- a pre-v15 upgrade produces blocks, taxes, and swaps without panic while Market starts disabled;
+- LUNC/USTC quotes match the two raw USD prices in both directions;
+- the multi-validator network demonstrates halt, persistence, and recovery across quorum thresholds;
+- the multi-validator network demonstrates expedited closure at 100%, persistence, and reopening at 0.35% with `uluna` deposits;
+- the 7% adaptive / 10% strict-cap separation is documented, liquidity adaptation satisfies proposal bounds over several epochs, and the TWAP is truly duration-weighted.
 
-### 14. Confidentialité et reproductibilité
+### 14. Confidentiality and Reproducibility
 
-Ce document ne contient aucune phrase mnémonique, clé privée ou secret Docker. Les adresses et transactions de la chaîne locale sont uniquement des données de test. La clé du validateur local utilisée pour le smoke test d'import a été copiée dans `/private/tmp`, montée en lecture seule, puis supprimée. Les exports de test restent hors du dépôt.
+This document contains no mnemonic phrase, private key, or Docker secret. Local-chain addresses and transactions are test data only. The local validator key used for the import smoke test was copied to `/private/tmp`, mounted read-only, and then deleted. Test exports remain outside the repository.
 
-Le devnet Docker est externe au dépôt MM2. Le nœud de la campagne initiale utilisait l'image construite depuis le commit core figé ; seule l'image du feeder avait alors été reconstruite. Les correctifs core sont maintenant clairement identifiés dans la branche locale avec leurs tests de régression et ne sont pas encore publiés.
+The Docker devnet is external to the MM2 repository. The initial campaign node used an image built from the frozen core revision; only the feeder image had been rebuilt at that stage. Core corrections are now clearly separated into reviewable commits on the published branch, and both draft PRs link the corresponding test evidence.
 
-### 15. Conclusion finale
+### 15. Final Conclusion
 
-Le cœur No-Mint démontre une base prometteuse : transferts depuis un pool réel, absence de mint Market, burn des frais et des fins d'époque, fiscalité à 60 %, plafonds et refus atomiques fonctionnent dans le profil local. Les suites Go et le fuzzing n'ont révélé aucune régression générale.
+The No-Mint core demonstrates a promising foundation: transfers from a real pool, absence of Market minting, fee and epoch-end burns, 60% tax routing, caps, and atomic rejections all work in the local profile. Go suites and fuzzing revealed no general regression.
 
-Le code n'est cependant pas encore prêt pour un test communautaire public. `INT-001`, `INT-002`, `INT-003` et `GAP-001` à `GAP-004` sont corrigés ou requalifiés puis validés localement, mais restent à relire, séparer en changements révisables et publier. Le chemin Oracle/TWAP/Market fonctionne désormais sur quatre validateurs locaux, sans pour autant valider encore les pertes de quorum, les puissances inégales et les transitions de gouvernance. L'exemple à 10 % de la proposition devrait également être clarifié.
+The code is nevertheless not yet ready for public community testing. `INT-001`, `INT-002`, `INT-003`, and `GAP-001` through `GAP-004` are corrected or reclassified and locally validated, and their draft reviews are open. They still require maintainer review, merge, and release. The Oracle/TWAP/Market path now operates across four local validators, but quorum loss, unequal powers, and governance transitions remain unvalidated at that level. The proposal's 10% example should also be clarified.
 
-**Décision recommandée : NO-GO communautaire en l'état.** La prochaine étape raisonnable est la revue et la publication des correctifs locaux, un test d'upgrade sur snapshot, puis l'extension de la campagne multi-validateur aux scénarios de panne et de gouvernance. Ce rapport fournit la baseline et les critères permettant de mesurer cette progression sans ambiguïté.
+**Recommended decision: community NO-GO in the current state.** The next reasonable steps are review and integration of the draft changes, an upgrade test against a representative snapshot, and extension of the multi-validator campaign to outage and governance scenarios. This report provides the baseline and criteria needed to measure that progress unambiguously.
