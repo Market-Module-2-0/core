@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/classic-terra/core/v4/tests/e2e/containers"
 	"github.com/classic-terra/core/v4/tests/e2e/initialization"
 	"github.com/classic-terra/core/v4/types/assets"
+	markettypes "github.com/classic-terra/core/v4/x/market/types"
 	"github.com/cometbft/cometbft/libs/bytes"
 	"github.com/cometbft/cometbft/p2p"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
@@ -23,6 +25,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
+	govv1 "github.com/cosmos/cosmos-sdk/x/gov/types/v1"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,30 +41,52 @@ func extractTxHashFromJSON(payload []byte) string {
 	return ""
 }
 
-// GetModuleAccountAddress returns the account address for a given module name (e.g., "market").
-// It queries `terrad query auth module-accounts --output=json` and scans for the matching ModuleAccount name.
-func (n *NodeConfig) GetModuleAccountAddress(moduleName string) string {
-	cmd := []string{"terrad", "query", "auth", "module-accounts", "--output=json"}
-	outBuf, errBuf, err := n.containerManager.ExecCmd(n.t, n.Name, cmd, "", false)
-	require.NoErrorf(n.t, err, "failed to query module accounts: stdout=%q stderr=%q", strings.TrimSpace(outBuf.String()), strings.TrimSpace(errBuf.String()))
+func findModuleAccountAddress(payload []byte, moduleName string) (string, error) {
 	var resp struct {
 		Accounts []struct {
 			Name        string `json:"name"`
 			BaseAccount struct {
 				Address string `json:"address"`
 			} `json:"base_account"`
+			Value struct {
+				Name        string `json:"name"`
+				Address     string `json:"address"`
+				BaseAccount struct {
+					Address string `json:"address"`
+				} `json:"base_account"`
+			} `json:"value"`
 		} `json:"accounts"`
 	}
-	require.NoErrorf(n.t, json.Unmarshal(outBuf.Bytes(), &resp), "failed to decode module accounts json: %q", strings.TrimSpace(outBuf.String()))
+	if err := json.Unmarshal(payload, &resp); err != nil {
+		return "", err
+	}
 	for _, acc := range resp.Accounts {
 		if acc.Name == moduleName {
 			if acc.BaseAccount.Address != "" {
-				return acc.BaseAccount.Address
+				return acc.BaseAccount.Address, nil
+			}
+		}
+		if acc.Value.Name == moduleName {
+			if acc.Value.Address != "" {
+				return acc.Value.Address, nil
+			}
+			if acc.Value.BaseAccount.Address != "" {
+				return acc.Value.BaseAccount.Address, nil
 			}
 		}
 	}
-	require.Failf(n.t, "module account not found", "module %s not found in module-accounts", moduleName)
-	return ""
+	return "", fmt.Errorf("module %s not found in module-accounts", moduleName)
+}
+
+// GetModuleAccountAddress returns the account address for a given module name (e.g., "market").
+// It queries `terrad query auth module-accounts --output=json` and scans for the matching ModuleAccount name.
+func (n *NodeConfig) GetModuleAccountAddress(moduleName string) string {
+	cmd := []string{"terrad", "query", "auth", "module-accounts", "--output=json"}
+	outBuf, errBuf, err := n.containerManager.ExecCmd(n.t, n.Name, cmd, "", false)
+	require.NoErrorf(n.t, err, "failed to query module accounts: stdout=%q stderr=%q", strings.TrimSpace(outBuf.String()), strings.TrimSpace(errBuf.String()))
+	address, err := findModuleAccountAddress(outBuf.Bytes(), moduleName)
+	require.NoErrorf(n.t, err, "failed to find module account in json: %q", strings.TrimSpace(outBuf.String()))
+	return address
 }
 
 func (n *NodeConfig) StoreWasmCode(wasmFile, from string) {
@@ -84,7 +109,11 @@ func (n *NodeConfig) DelegateOracleFeedConsent(feeder string) {
 	require.NotEmpty(n.t, n.OperatorAddress, "validator operator address must be known before delegating feeder consent")
 	n.LogActionF("delegating oracle feed consent: validator=%s feeder=%s", n.OperatorAddress, feeder)
 	// terrad tx oracle set-feeder [feeder]
-	cmd := []string{"terrad", "tx", "oracle", "set-feeder", feeder, fmt.Sprintf("--from=%s", initialization.ValidatorWalletName)}
+	cmd := []string{
+		"terrad", "tx", "oracle", "set-feeder", feeder,
+		fmt.Sprintf("--from=%s", initialization.ValidatorWalletName),
+		fmt.Sprintf("--gas=%d", containers.OracleGasLimit), "--fees=0uluna",
+	}
 	outBuf, errBuf, err := n.containerManager.ExecTxCmd(n.t, n.chainID, n.Name, cmd)
 	require.NoError(n.t, err, "feeder delegation tx failed: stderr=%s stdout=%s", strings.TrimSpace(errBuf.String()), strings.TrimSpace(outBuf.String()))
 	// Verify via query with retries until feeder mapping matches expected
@@ -236,6 +265,68 @@ func (n *NodeConfig) SubmitParamChangeProposal(proposalJSON, from string) {
 	require.NoError(n.t, err)
 
 	n.LogActionF("successfully submitted param change proposal")
+}
+
+// SubmitExpeditedMarketSpreadProposal submits a fully funded v1 governance
+// proposal that changes the existing Market brake parameter. The v1 envelope
+// is required to mark the legacy parameter-change content as expedited.
+func (n *NodeConfig) SubmitExpeditedMarketSpreadProposal(spread, from string) int {
+	n.LogActionF("submitting expedited Market spread proposal: %s", spread)
+	authority := authtypes.NewModuleAddress(govtypes.ModuleName).String()
+	deposit := sdk.NewCoin(
+		initialization.TerraDenom,
+		govv1.DefaultMinExpeditedDepositTokens,
+	).String()
+	proposal := map[string]any{
+		"messages": []any{
+			map[string]any{
+				"@type": "/cosmos.gov.v1.MsgExecLegacyContent",
+				"content": map[string]any{
+					"@type":       "/cosmos.params.v1beta1.ParameterChangeProposal",
+					"title":       "MM2 Market brake",
+					"description": "Set the existing minimum stability spread through expedited governance.",
+					"changes": []any{
+						map[string]any{
+							"subspace": markettypes.ModuleName,
+							"key":      string(markettypes.KeyMinStabilitySpread),
+							"value":    fmt.Sprintf("%q", spread),
+						},
+					},
+				},
+				"authority": authority,
+			},
+		},
+		"metadata":  "",
+		"deposit":   deposit,
+		"title":     "MM2 Market brake",
+		"summary":   fmt.Sprintf("Set the minimum stability spread to %s.", spread),
+		"expedited": true,
+	}
+
+	bz, err := json.Marshal(proposal)
+	require.NoError(n.t, err)
+	wd, err := os.Getwd()
+	require.NoError(n.t, err)
+	f, err := os.CreateTemp(filepath.Join(wd, "scripts"), "market_spread_proposal_*.json")
+	require.NoError(n.t, err)
+	localProposalFile := f.Name()
+	defer os.Remove(localProposalFile)
+	_, err = f.Write(bz)
+	require.NoError(n.t, err)
+	require.NoError(n.t, f.Close())
+
+	containerProposalFile := filepath.Join("/terra", filepath.Base(localProposalFile))
+	cmd := []string{
+		"terrad", "tx", "gov", "submit-proposal", containerProposalFile,
+		fmt.Sprintf("--from=%s", from),
+	}
+	resp, _, err := n.containerManager.ExecTxCmd(n.t, n.chainID, n.Name, cmd)
+	require.NoError(n.t, err)
+	proposalID, err := extractProposalIDFromResponse(resp.String())
+	require.NoError(n.t, err)
+
+	n.LogActionF("successfully submitted expedited Market spread proposal %d", proposalID)
+	return proposalID
 }
 
 func (n *NodeConfig) SubmitAddBurnTaxExemptionAddressProposalV1(addresses []string, walletName string) int {
@@ -542,19 +633,54 @@ func AllValsVoteOnProposal(chain *Config, propNumber int) {
 }
 
 func extractProposalIDFromResponse(response string) (int, error) {
-	// Extract the proposal ID from the response
-	startIndex := strings.Index(response, `[{"key":"proposal_id","value":"`) + len(`[{"key":"proposal_id","value":"`)
-	endIndex := strings.Index(response[startIndex:], `"`)
-
-	// Extract the proposal ID substring
-	proposalIDStr := response[startIndex : startIndex+endIndex]
-
-	// Convert the proposal ID from string to int
-	proposalID, err := strconv.Atoi(proposalIDStr)
-	if err != nil {
-		return 0, err
+	var payload any
+	if err := json.Unmarshal([]byte(response), &payload); err != nil {
+		return 0, fmt.Errorf("decode proposal transaction response: %w", err)
 	}
 
+	var findProposalID func(any) (string, bool)
+	findProposalID = func(value any) (string, bool) {
+		switch typed := value.(type) {
+		case map[string]any:
+			if key, ok := typed["key"].(string); ok && key == "proposal_id" {
+				switch proposalID := typed["value"].(type) {
+				case string:
+					return proposalID, true
+				case float64:
+					return strconv.FormatInt(int64(proposalID), 10), true
+				}
+			}
+			if proposalID, ok := typed["proposal_id"]; ok {
+				switch value := proposalID.(type) {
+				case string:
+					return value, true
+				case float64:
+					return strconv.FormatInt(int64(value), 10), true
+				}
+			}
+			for _, nested := range typed {
+				if proposalID, ok := findProposalID(nested); ok {
+					return proposalID, true
+				}
+			}
+		case []any:
+			for _, nested := range typed {
+				if proposalID, ok := findProposalID(nested); ok {
+					return proposalID, true
+				}
+			}
+		}
+		return "", false
+	}
+
+	proposalIDStr, ok := findProposalID(payload)
+	if !ok {
+		return 0, fmt.Errorf("proposal_id not found in transaction response")
+	}
+	proposalID, err := strconv.Atoi(proposalIDStr)
+	if err != nil {
+		return 0, fmt.Errorf("invalid proposal_id %q: %w", proposalIDStr, err)
+	}
 	return proposalID, nil
 }
 
@@ -598,6 +724,17 @@ func (n *NodeConfig) MarketSwap(offerCoin string, askDenom string, walletName st
 	_, _, err := n.containerManager.ExecTxCmd(n.t, n.chainID, n.Name, cmd)
 	require.NoError(n.t, err)
 	n.LogActionF("successfully swapped %s to %s", offerCoin, askDenom)
+}
+
+// MarketSwapExpectCode broadcasts a swap that is expected to be rejected by
+// DeliverTx and returns the committed response for precise assertions.
+func (n *NodeConfig) MarketSwapExpectCode(offerCoin string, askDenom string, walletName string, expectedCode int) containers.TxResponse {
+	n.LogActionF("market swap %s -> %s from %s; expecting code %d", offerCoin, askDenom, walletName, expectedCode)
+	cmd := []string{"terrad", "tx", "market", "swap", offerCoin, askDenom, fmt.Sprintf("--from=%s", walletName)}
+	response, err := n.containerManager.ExecTxCmdExpectCode(n.t, n.chainID, n.Name, cmd, expectedCode)
+	require.NoError(n.t, err)
+	require.Equal(n.t, expectedCode, response.Code)
+	return response
 }
 
 func (n *NodeConfig) GrantAddress(granter, gratee string, spendLimit string, walletName string) {
@@ -695,7 +832,11 @@ func (n *NodeConfig) Unjail(walletName string) error {
 
 func (n *NodeConfig) DelegateFeedConsent(feederAddr string, walletName string) {
 	n.LogActionF("delegating feed consent to %s from wallet %s", feederAddr, walletName)
-	cmd := []string{"terrad", "tx", "oracle", "set-feeder", feederAddr, fmt.Sprintf("--from=%s", walletName)}
+	cmd := []string{
+		"terrad", "tx", "oracle", "set-feeder", feederAddr,
+		fmt.Sprintf("--from=%s", walletName),
+		fmt.Sprintf("--gas=%d", containers.OracleGasLimit), "--fees=0uluna",
+	}
 	_, _, err := n.containerManager.ExecTxCmd(n.t, n.chainID, n.Name, cmd)
 	require.NoError(n.t, err)
 	n.LogActionF("successfully delegated feed consent to %s", feederAddr)
@@ -718,7 +859,11 @@ func (n *NodeConfig) SubmitOracleAggregatePrevote(salt string, amount string) {
 	hash := hex.EncodeToString(sum[:])
 	n.LogActionF("submitting oracle aggregate prevote for %s (salt=%s rates=%s hash=%s)", n.OperatorAddress, salt, amount, hash)
 	// IMPORTANT: positional args must come BEFORE flags for cobra to parse them; pass validator before --from
-	cmd := []string{"terrad", "tx", "oracle", "aggregate-prevote", salt, amount, n.OperatorAddress, fmt.Sprintf("--from=%s", initialization.ValidatorWalletName)}
+	cmd := []string{
+		"terrad", "tx", "oracle", "aggregate-prevote", salt, amount, n.OperatorAddress,
+		fmt.Sprintf("--from=%s", initialization.ValidatorWalletName),
+		fmt.Sprintf("--gas=%d", containers.OracleGasLimit), "--fees=0uluna",
+	}
 	outBuf, errBuf, err := n.containerManager.ExecTxCmd(n.t, n.chainID, n.Name, cmd)
 	require.NoError(n.t, err)
 	// Try to log txhash for correlation
@@ -750,41 +895,18 @@ func (n *NodeConfig) SubmitOracleAggregateVote(salt string, amount string) {
 	require.NotEmpty(n.t, n.OperatorAddress, "validator operator address must be known before submitting oracle vote")
 	n.LogActionF("submitting oracle aggregate vote for %s", n.OperatorAddress)
 	// IMPORTANT: positional args must come BEFORE flags for cobra to parse them; pass validator before --from
-	base := []string{
+	cmd := []string{
 		"terrad", "tx", "oracle", "aggregate-vote", salt, amount, n.OperatorAddress,
-		fmt.Sprintf("--from=%s", initialization.ValidatorWalletName), fmt.Sprintf("--chain-id=%s", n.chainID), "--yes", "--keyring-backend=test", "--log_format=json",
-		"--gas=4000000", "--fees=0uluna",
+		fmt.Sprintf("--from=%s", initialization.ValidatorWalletName),
+		fmt.Sprintf("--gas=%d", containers.OracleGasLimit), "--fees=0uluna",
 	}
-	// Use ExecCmd directly with empty success string so we can parse and retry ourselves without require.Eventually gating.
-	for attempt := 1; attempt <= 6; attempt++ {
-		outBuf, errBuf, _ := n.containerManager.ExecCmd(n.t, n.Name, base, "", false)
-		out := strings.TrimSpace(outBuf.String())
-		errS := strings.TrimSpace(errBuf.String())
-		// Try to decode code field; fall back to substring search
-		var resp struct {
-			Code   int    `json:"code"`
-			RawLog string `json:"raw_log"`
-		}
-		_ = json.Unmarshal(outBuf.Bytes(), &resp)
-		if resp.Code == 0 || strings.Contains(out, "\"code\":0") {
-			if txh := extractTxHashFromJSON(outBuf.Bytes()); txh != "" {
-				n.LogActionF("vote tx accepted; txhash=%s", txh)
-			} else if txh := extractTxHashFromJSON(errBuf.Bytes()); txh != "" {
-				n.LogActionF("vote tx accepted; txhash=%s (stderr)", txh)
-			} else {
-				n.LogActionF("vote tx accepted; stdout=%q stderr=%q", out, errS)
-			}
-			n.LogActionF("successfully submitted oracle aggregate vote")
-			return
-		}
-		if strings.Contains(out, "no aggregate prevote") || strings.Contains(resp.RawLog, "no aggregate prevote") {
-			n.LogActionF("vote attempt %d failed with 'no aggregate prevote'; retrying shortly... stdout=%q stderr=%q", attempt, out, errS)
-			time.Sleep(1 * time.Second)
-			continue
-		}
-		// Non-retryable failure: surface details and stop
-		require.Failf(n.t, "aggregate vote failed", "validator=%s stdout=%s stderr=%s", n.OperatorAddress, out, errS)
+	outBuf, errBuf, err := n.containerManager.ExecTxCmd(n.t, n.chainID, n.Name, cmd)
+	require.NoErrorf(n.t, err, "aggregate vote failed: validator=%s stdout=%s stderr=%s",
+		n.OperatorAddress, strings.TrimSpace(outBuf.String()), strings.TrimSpace(errBuf.String()))
+	if txh := extractTxHashFromJSON(outBuf.Bytes()); txh != "" {
+		n.LogActionF("vote txhash=%s", txh)
 	}
+	n.LogActionF("successfully submitted oracle aggregate vote")
 }
 
 // HasOracleAggregatePrevote returns true if this validator has an aggregate prevote recorded on-chain.

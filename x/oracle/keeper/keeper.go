@@ -18,7 +18,7 @@ import (
 
 // MarketHooks defines the interface for market module hooks
 type MarketHooks interface {
-	AfterOracleTally(ctx sdk.Context)
+	AfterOracleTally(ctx sdk.Context, votePeriod uint64, votePowers []types.DenomVotePower)
 }
 
 // Keeper of the oracle store

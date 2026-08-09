@@ -14,4 +14,6 @@ var (
 	ErrOraclePriceStale      = errorsmod.Register(ModuleName, 7, "oracle price too old; swap denied")
 	ErrTWAPDeviation         = errorsmod.Register(ModuleName, 8, "price deviates too much from TWAP")
 	ErrDailyCapExceeded      = errorsmod.Register(ModuleName, 9, "daily swap cap exceeded")
+	ErrMarketDisabled        = errorsmod.Register(ModuleName, 10, "market module is disabled")
+	ErrTWAPNotReady          = errorsmod.Register(ModuleName, 11, "complete TWAP history is not available")
 )

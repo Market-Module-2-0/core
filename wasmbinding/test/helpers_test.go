@@ -4,10 +4,13 @@ import (
 	"os"
 	"testing"
 
+	sdkmath "cosmossdk.io/math"
 	wasmkeeper "github.com/CosmWasm/wasmd/x/wasm/keeper"
 	wasmtypes "github.com/CosmWasm/wasmd/x/wasm/types"
 	apptesting "github.com/classic-terra/core/v4/app/testing"
 	core "github.com/classic-terra/core/v4/types"
+	marketkeeper "github.com/classic-terra/core/v4/x/market/keeper"
+	oracletypes "github.com/classic-terra/core/v4/x/oracle/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/suite"
 )
@@ -22,8 +25,35 @@ func TestWasmTestSuite(t *testing.T) {
 
 func (s *WasmTestSuite) SetupTest() {
 	s.Setup(s.T(), apptesting.SimAppChainID)
-	// Allow SDR swaps in tests; production defaults to USD-only
-	s.App.MarketKeeper.SetAllowedSwapDenoms([]string{core.MicroUSDDenom, core.MicroSDRDenom})
+	// Allow SDR swaps through the explicit legacy-rate mode required by these
+	// binding fixtures; production remains configured for USTC only.
+	s.App.MarketKeeper.SetMarketAssets([]marketkeeper.MarketAssetConfig{
+		{
+			BankDenom:   core.MicroUSDDenom,
+			OracleDenom: oracletypes.MetaUSDDenom,
+			PriceSource: marketkeeper.MarketAssetPriceUSD,
+		},
+		{
+			BankDenom:   core.MicroSDRDenom,
+			OracleDenom: core.MicroSDRDenom,
+			PriceSource: marketkeeper.MarketAssetPriceLunaRate,
+		},
+	})
+	// This fixture exercises bindings, not the post-upgrade collection phase.
+	s.App.MarketKeeper.SetMarketEnabled(s.Ctx, true)
+	s.App.MarketKeeper.SetInitialActivationPending(s.Ctx, false)
+	s.Require().True(s.App.MarketKeeper.IsMarketEnabled(s.Ctx))
+}
+
+func (s *WasmTestSuite) seedCompleteTWAP(prices map[string]sdkmath.LegacyDec) {
+	lookback := int64(s.App.MarketKeeper.TwapLookbackWindow(s.Ctx))
+	if s.Ctx.BlockHeight() < lookback {
+		s.Ctx = s.Ctx.WithBlockHeight(lookback)
+	}
+	historyCtx := s.Ctx.WithBlockHeight(s.Ctx.BlockHeight() - lookback)
+	for denom, price := range prices {
+		s.App.MarketKeeper.AddTWAPPrice(historyCtx, denom, price)
+	}
 }
 
 func (s *WasmTestSuite) InstantiateContract(addr sdk.AccAddress, contractPath string) sdk.AccAddress {

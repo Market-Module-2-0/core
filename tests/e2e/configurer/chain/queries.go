@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	sdkmath "cosmossdk.io/math"
 	wasmtypes "github.com/CosmWasm/wasmd/x/wasm/types"
 	"github.com/classic-terra/core/v4/tests/e2e/initialization"
 	"github.com/classic-terra/core/v4/tests/e2e/util"
+	markettypes "github.com/classic-terra/core/v4/x/market/types"
 	oracletypes "github.com/classic-terra/core/v4/x/oracle/types"
 	taxtypes "github.com/classic-terra/core/v4/x/tax/types"
 	taxexemptiontypes "github.com/classic-terra/core/v4/x/taxexemption/types"
@@ -279,6 +281,51 @@ func (n *NodeConfig) QueryPropStatus(proposalNumber int) (string, error) {
 	return status, nil
 }
 
+type GovernanceTally struct {
+	YesCount        string `json:"yes_count"`
+	AbstainCount    string `json:"abstain_count"`
+	NoCount         string `json:"no_count"`
+	NoWithVetoCount string `json:"no_with_veto_count"`
+}
+
+type GovernanceProposal struct {
+	ID               string           `json:"id"`
+	Status           string           `json:"status"`
+	FinalTallyResult *GovernanceTally `json:"final_tally_result"`
+	Expedited        bool             `json:"expedited"`
+}
+
+func (n *NodeConfig) QueryGovernanceProposal(proposalNumber int) (GovernanceProposal, error) {
+	path := fmt.Sprintf("cosmos/gov/v1/proposals/%d", proposalNumber)
+	bz, err := n.QueryGRPCGateway(path)
+	if err != nil {
+		return GovernanceProposal{}, err
+	}
+
+	var response struct {
+		Proposal GovernanceProposal `json:"proposal"`
+	}
+	if err := json.Unmarshal(bz, &response); err != nil {
+		return GovernanceProposal{}, err
+	}
+	return response.Proposal, nil
+}
+
+func (n *NodeConfig) QueryMarketMinStabilitySpread() (string, error) {
+	var response struct {
+		Param struct {
+			Value string `json:"value"`
+		} `json:"param"`
+	}
+	n.QueryParams(markettypes.ModuleName, string(markettypes.KeyMinStabilitySpread), &response)
+
+	var spread string
+	if err := json.Unmarshal([]byte(response.Param.Value), &spread); err != nil {
+		return "", fmt.Errorf("decode Market minimum stability spread: %w", err)
+	}
+	return spread, nil
+}
+
 // QueryHashFromBlock gets block hash at a specific height. Otherwise, error.
 func (n *NodeConfig) QueryHashFromBlock(height int64) (string, error) {
 	block, err := n.rpcClient.Block(context.Background(), &height)
@@ -295,6 +342,25 @@ func (n *NodeConfig) QueryCurrentHeight() (int64, error) {
 		return 0, err
 	}
 	return status.SyncInfo.LatestBlockHeight, nil
+}
+
+// QueryValidatorTokens returns the validator's current bonded token amount.
+func (n *NodeConfig) QueryValidatorTokens(operatorAddress string) (int64, error) {
+	path := fmt.Sprintf("cosmos/staking/v1beta1/validators/%s", operatorAddress)
+	bz, err := n.QueryGRPCGateway(path)
+	if err != nil {
+		return 0, err
+	}
+
+	var response struct {
+		Validator struct {
+			Tokens string `json:"tokens"`
+		} `json:"validator"`
+	}
+	if err := json.Unmarshal(bz, &response); err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(response.Validator.Tokens, 10, 64)
 }
 
 // QueryLatestBlockTime returns the latest block time.

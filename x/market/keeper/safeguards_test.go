@@ -21,6 +21,10 @@ func TestOracleFreshnessCheck(t *testing.T) {
 	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, oracletypes.MetaUSDDenom, lunaPriceInUSD)
 	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, core.MicroSDRDenom, sdkmath.LegacyOneDec())
 	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, core.MicroUSDDenom, lunaPriceInUSD)
+	SeedCompleteTWAP(&input, map[string]sdkmath.LegacyDec{
+		core.MicroUSDDenom:       lunaPriceInUSD,
+		oracletypes.MetaUSDDenom: lunaPriceInUSD,
+	})
 
 	// Set up pool liquidity
 	poolCoins := sdk.NewCoins(
@@ -64,44 +68,102 @@ func TestOracleFreshnessCheck(t *testing.T) {
 // TestTWAPTracking tests TWAP price snapshot tracking
 func TestTWAPTracking(t *testing.T) {
 	input := CreateTestInput(t)
-
-	denom := oracletypes.MetaUSDDenom // Use MetaUSDDenom as that's what the code tracks
+	denom := oracletypes.MetaUSDDenom
 
 	// Test 1: No TWAP data initially
 	_, err := input.MarketKeeper.ComputeTWAP(input.Ctx, denom)
-	require.Error(t, err, "should error when no TWAP data exists")
+	require.ErrorIs(t, err, types.ErrTWAPNotReady)
 
-	// Test 2: Add price snapshots
-	prices := []sdkmath.LegacyDec{
-		sdkmath.LegacyNewDecWithPrec(100, 2), // 1.00
-		sdkmath.LegacyNewDecWithPrec(105, 2), // 1.05
-		sdkmath.LegacyNewDecWithPrec(110, 2), // 1.10
-		sdkmath.LegacyNewDecWithPrec(95, 2),  // 0.95
-		sdkmath.LegacyNewDecWithPrec(100, 2), // 1.00
-	}
-
-	for i, price := range prices {
-		input.Ctx = input.Ctx.WithBlockHeight(int64(i + 1))
-		input.MarketKeeper.AddTWAPPrice(input.Ctx, denom, price)
-	}
-
-	// Test 3: Compute TWAP (simple average)
+	// Price 1 is effective for 40 blocks, then price 2 for 5 blocks.
+	input.Ctx = input.Ctx.WithBlockHeight(0)
+	input.MarketKeeper.AddTWAPPrice(input.Ctx, denom, sdkmath.LegacyOneDec())
+	input.Ctx = input.Ctx.WithBlockHeight(40)
+	input.MarketKeeper.AddTWAPPrice(input.Ctx, denom, sdkmath.LegacyNewDec(2))
+	input.Ctx = input.Ctx.WithBlockHeight(45)
 	twap, err := input.MarketKeeper.ComputeTWAP(input.Ctx, denom)
 	require.NoError(t, err)
+	expectedTWAP := sdkmath.LegacyNewDec(50).QuoInt64(45)
+	require.Equal(t, expectedTWAP, twap)
 
-	expectedTWAP := sdkmath.LegacyNewDecWithPrec(102, 2) // (1.00 + 1.05 + 1.10 + 0.95 + 1.00) / 5 = 1.02
-	require.True(t, twap.Sub(expectedTWAP).Abs().LTE(sdkmath.LegacyNewDecWithPrec(1, 3)),
-		"TWAP should be approximately %s, got %s", expectedTWAP, twap)
-
-	// Test 4: Old snapshots are pruned
-	lookbackWindow := input.MarketKeeper.TwapLookbackWindow(input.Ctx)
-	input.Ctx = input.Ctx.WithBlockHeight(int64(lookbackWindow) + 100)
-	input.MarketKeeper.AddTWAPPrice(input.Ctx, denom, sdkmath.LegacyNewDecWithPrec(200, 2))
-
-	// Get TWAP should still work with the new snapshot
+	// Adding a new observation prunes old data but retains price 2 as the
+	// predecessor of the next window boundary at height 45.
+	input.Ctx = input.Ctx.WithBlockHeight(90)
+	input.MarketKeeper.AddTWAPPrice(input.Ctx, denom, sdkmath.LegacyNewDec(3))
+	snapshots := input.MarketKeeper.GetTWAPPrices(input.Ctx, denom)
+	require.Equal(t, []types.PriceSnapshot{
+		{Height: 40, Price: sdkmath.LegacyNewDec(2)},
+		{Height: 90, Price: sdkmath.LegacyNewDec(3)},
+	}, snapshots)
 	twap2, err := input.MarketKeeper.ComputeTWAP(input.Ctx, denom)
 	require.NoError(t, err)
-	require.Equal(t, sdkmath.LegacyNewDecWithPrec(200, 2), twap2, "TWAP should be the new price after pruning")
+	require.Equal(t, sdkmath.LegacyNewDec(2), twap2)
+}
+
+func TestTWAPRequiresCompleteWindow(t *testing.T) {
+	input := CreateTestInput(t)
+	denom := oracletypes.MetaUSDDenom
+
+	input.Ctx = input.Ctx.WithBlockHeight(1)
+	input.MarketKeeper.AddTWAPPrice(input.Ctx, denom, sdkmath.LegacyOneDec())
+	input.Ctx = input.Ctx.WithBlockHeight(45)
+	_, err := input.MarketKeeper.ComputeTWAP(input.Ctx, denom)
+	require.ErrorIs(t, err, types.ErrTWAPNotReady)
+
+	// At height 46 the same observation covers [1, 46), exactly 45 blocks.
+	input.Ctx = input.Ctx.WithBlockHeight(46)
+	twap, err := input.MarketKeeper.ComputeTWAP(input.Ctx, denom)
+	require.NoError(t, err)
+	require.Equal(t, sdkmath.LegacyOneDec(), twap)
+}
+
+func TestSwapWaitsForCompleteTWAPOnEveryOracleInput(t *testing.T) {
+	input := CreateTestInput(t)
+	input.MarketKeeper.SetMarketAssets(defaultMarketAssets())
+	price := sdkmath.LegacyOneDec()
+	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, core.MicroUSDDenom, price)
+	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, oracletypes.MetaUSDDenom, price)
+	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, core.MicroSDRDenom, price)
+	input.MarketKeeper.SetLastOracleTallyTime(input.Ctx, input.Ctx.BlockTime().Unix())
+
+	// At height 100 the window begins at 55. UST covers it, but uusd starts one
+	// block too late, so the pair is not ready yet.
+	input.MarketKeeper.AddTWAPPrice(
+		input.Ctx.WithBlockHeight(55), oracletypes.MetaUSDDenom, price,
+	)
+	input.MarketKeeper.AddTWAPPrice(
+		input.Ctx.WithBlockHeight(56), core.MicroUSDDenom, price,
+	)
+	input.Ctx = input.Ctx.WithBlockHeight(100)
+
+	pool := sdk.NewCoins(
+		sdk.NewInt64Coin(core.MicroLunaDenom, 10_000_000),
+		sdk.NewInt64Coin(core.MicroUSDDenom, 10_000_000),
+	)
+	require.NoError(t, FundModuleAccount(input, types.ModuleName, pool))
+	offer := sdk.NewInt64Coin(core.MicroLunaDenom, 100_000)
+	trader := Addrs[0]
+	traderBefore := input.BankKeeper.GetAllBalances(input.Ctx, trader)
+	marketAddr := input.AccountKeeper.GetModuleAddress(types.ModuleName)
+	marketBefore := input.BankKeeper.GetAllBalances(input.Ctx, marketAddr)
+
+	server := NewMsgServerImpl(input.MarketKeeper)
+	_, err := server.Swap(
+		sdk.WrapSDKContext(input.Ctx),
+		types.NewMsgSwap(trader, offer, core.MicroUSDDenom),
+	)
+	require.ErrorIs(t, err, types.ErrTWAPNotReady)
+	require.Equal(t, traderBefore, input.BankKeeper.GetAllBalances(input.Ctx, trader))
+	require.Equal(t, marketBefore, input.BankKeeper.GetAllBalances(input.Ctx, marketAddr))
+
+	// One block later the window begins at 56 and both observations cover all
+	// 45 blocks, so the same swap is admitted.
+	input.Ctx = input.Ctx.WithBlockHeight(101)
+	response, err := server.Swap(
+		sdk.WrapSDKContext(input.Ctx),
+		types.NewMsgSwap(trader, offer, core.MicroUSDDenom),
+	)
+	require.NoError(t, err)
+	require.True(t, response.SwapCoin.IsPositive())
 }
 
 // TestTWAPDeviationCheck tests that swaps are denied when price deviates too much from TWAP
@@ -111,16 +173,13 @@ func TestTWAPDeviationCheck(t *testing.T) {
 	trader := Addrs[0]
 	msgServer := NewMsgServerImpl(input.MarketKeeper)
 
-	// Set up TWAP with stable price around 1.00 USD
+	// Set up a complete 45-block TWAP at 1.00 USD for both required inputs.
 	denom := oracletypes.MetaUSDDenom
 	basePrice := sdkmath.LegacyNewDecWithPrec(100, 2) // 1.00 USD
-
-	for i := 0; i < 10; i++ {
-		input.Ctx = input.Ctx.WithBlockHeight(int64(i + 1))
-		// Add slight variations around 1.00
-		variation := sdkmath.LegacyNewDecWithPrec(int64(i%3-1), 2) // -0.01, 0, 0.01
-		input.MarketKeeper.AddTWAPPrice(input.Ctx, denom, basePrice.Add(variation))
-	}
+	SeedCompleteTWAP(&input, map[string]sdkmath.LegacyDec{
+		denom:              basePrice,
+		core.MicroUSDDenom: basePrice,
+	})
 
 	// Set oracle prices (need SDR for swap calculations)
 	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, core.MicroSDRDenom, sdkmath.LegacyOneDec())
@@ -236,6 +295,10 @@ func TestDailyCapEnforcement(t *testing.T) {
 
 	// Set block height and baselines (simulating epoch change)
 	input.Ctx = input.Ctx.WithBlockHeight(100)
+	SeedCompleteTWAP(&input, map[string]sdkmath.LegacyDec{
+		core.MicroUSDDenom:       lunaPriceInUSD,
+		oracletypes.MetaUSDDenom: lunaPriceInUSD,
+	})
 	input.MarketKeeper.SetDailyCapBaseline(input.Ctx, core.MicroLunaDenom, lunaBaseline)
 	input.MarketKeeper.SetDailyCapBaseline(input.Ctx, core.MicroUSDDenom, usdBaseline)
 	input.MarketKeeper.SetDailyCapResetHeight(input.Ctx, input.Ctx.BlockHeight())
@@ -307,6 +370,7 @@ func TestEpochBaselineSetup(t *testing.T) {
 	params.EpochLengthBlocks = 100
 	input.MarketKeeper.SetParams(input.Ctx, params)
 
+	setFreshAdaptiveOracle(input)
 	input.Ctx = input.Ctx.WithBlockHeight(101)
 	input.MarketKeeper.ProcessEpochIfDue(input.Ctx)
 
@@ -320,6 +384,66 @@ func TestEpochBaselineSetup(t *testing.T) {
 	// Check that daily reset height was initialized
 	resetHeight := input.MarketKeeper.GetDailyCapResetHeight(input.Ctx)
 	require.Equal(t, int64(101), resetHeight, "reset height should be set to epoch height")
+}
+
+func TestDailyCapCountsGrossPoolDrain(t *testing.T) {
+	input := CreateTestInput(t)
+	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, oracletypes.MetaUSDDenom, sdkmath.LegacyNewDec(5))
+	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, core.MicroUSDDenom, sdkmath.LegacyNewDec(5))
+	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, core.MicroSDRDenom, sdkmath.LegacyOneDec())
+	input.MarketKeeper.SetLastOracleTallyTime(input.Ctx, input.Ctx.BlockTime().Unix())
+	SeedCompleteTWAP(&input, map[string]sdkmath.LegacyDec{
+		core.MicroUSDDenom:       sdkmath.LegacyNewDec(5),
+		oracletypes.MetaUSDDenom: sdkmath.LegacyNewDec(5),
+	})
+
+	baseline := sdkmath.NewInt(1_000_000)
+	pool := sdk.NewCoins(
+		sdk.NewCoin(core.MicroLunaDenom, baseline),
+		sdk.NewInt64Coin(core.MicroUSDDenom, 5_000_000),
+	)
+	require.NoError(t, FundModuleAccount(input, types.ModuleName, pool))
+	input.MarketKeeper.SetDailyCapBaseline(input.Ctx, core.MicroLunaDenom, baseline)
+	input.MarketKeeper.SetDailyCapResetHeight(input.Ctx, input.Ctx.BlockHeight())
+
+	offer := sdk.NewInt64Coin(core.MicroUSDDenom, 50_000)
+	require.NoError(t, FundAccount(input, Addrs[0], sdk.NewCoins(offer)))
+	response, err := NewMsgServerImpl(input.MarketKeeper).Swap(
+		sdk.WrapSDKContext(input.Ctx),
+		types.NewMsgSwap(Addrs[0], offer, core.MicroLunaDenom),
+	)
+	require.NoError(t, err)
+	require.True(t, response.SwapFee.IsPositive())
+	require.Equal(t,
+		response.SwapCoin.Amount.Add(response.SwapFee.Amount),
+		input.MarketKeeper.GetDailyCapUsage(input.Ctx, core.MicroLunaDenom),
+	)
+}
+
+func TestEpochClearsPreviousCapState(t *testing.T) {
+	input := CreateTestInput(t)
+	input.MarketKeeper.SetDailyCapBaseline(input.Ctx, core.MicroSDRDenom, sdkmath.NewInt(3_000_000))
+	input.MarketKeeper.SetDailyCapUsage(input.Ctx, core.MicroLunaDenom, sdkmath.NewInt(90_000))
+
+	accumulator := sdk.NewCoins(
+		sdk.NewInt64Coin(core.MicroLunaDenom, 2_000_000),
+		sdk.NewInt64Coin(core.MicroUSDDenom, 10_000_000),
+	)
+	require.NoError(t, input.BankKeeper.MintCoins(input.Ctx, faucetAccountName, accumulator))
+	require.NoError(t, input.BankKeeper.SendCoinsFromModuleToModule(
+		input.Ctx, faucetAccountName, types.AccumulatorModuleName, accumulator,
+	))
+	setFreshAdaptiveOracle(input)
+
+	input.Ctx = input.Ctx.WithBlockHeight(1)
+	input.MarketKeeper.ProcessEpochIfDue(input.Ctx)
+
+	require.True(t, input.MarketKeeper.GetDailyCapBaseline(input.Ctx, core.MicroSDRDenom).IsZero())
+	require.True(t, input.MarketKeeper.GetDailyCapUsage(input.Ctx, core.MicroLunaDenom).IsZero())
+	require.Equal(t,
+		accumulator.AmountOf(core.MicroLunaDenom),
+		input.MarketKeeper.GetDailyCapBaseline(input.Ctx, core.MicroLunaDenom),
+	)
 }
 
 // TestAfterOracleTallyHook tests that the oracle tally hook updates TWAP and timestamp
@@ -340,7 +464,7 @@ func TestAfterOracleTallyHook(t *testing.T) {
 	require.Equal(t, ustcPrice, retrievedPrice, "retrieved price should match")
 
 	// Call the hook
-	input.MarketKeeper.AfterOracleTally(input.Ctx)
+	input.MarketKeeper.AfterOracleTally(input.Ctx, 0, nil)
 
 	// Test 1: Tally timestamp was updated
 	lastTallyTime := input.MarketKeeper.GetLastOracleTallyTime(input.Ctx)
@@ -413,6 +537,10 @@ func setupSwapEnv(t *testing.T, input TestInput, poolCoins sdk.Coins) types.MsgS
 	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, core.MicroSDRDenom, sdkmath.LegacyOneDec())
 	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, core.MicroUSDDenom, sdkmath.LegacyNewDec(5))
 	input.MarketKeeper.SetLastOracleTallyTime(input.Ctx, input.Ctx.BlockTime().Unix())
+	SeedCompleteTWAP(&input, map[string]sdkmath.LegacyDec{
+		core.MicroUSDDenom:       sdkmath.LegacyNewDec(5),
+		oracletypes.MetaUSDDenom: sdkmath.LegacyNewDec(5),
+	})
 
 	require.NoError(t, FundModuleAccount(input, types.ModuleName, poolCoins))
 
@@ -499,6 +627,7 @@ func TestEpochClearsStaleCapState(t *testing.T) {
 	params.EpochLengthBlocks = 100
 	input.MarketKeeper.SetParams(input.Ctx, params)
 
+	setFreshAdaptiveOracle(input)
 	input.Ctx = input.Ctx.WithBlockHeight(101)
 	input.MarketKeeper.ProcessEpochIfDue(input.Ctx)
 
@@ -509,13 +638,10 @@ func TestEpochClearsStaleCapState(t *testing.T) {
 	require.Equal(t, sdkmath.NewInt(2000000), input.MarketKeeper.GetDailyCapBaseline(input.Ctx, core.MicroLunaDenom))
 }
 
-// TestTWAPDeviationUsesMetaUSTRate pins which rate guards a uusd leg.
-//
-// The UST meta rate is the real USD price of 1 USTC and is the guard input. The
-// legacy uusd rate is a LUNC price recorded under the old 1 USTC = 1 USD
-// assumption - the very thing the meta rate exists to correct - so a move in it
-// alone is not treated as a USTC price deviation.
-func TestTWAPDeviationUsesMetaUSTRate(t *testing.T) {
+// TestTWAPDeviationUsesEveryAssetInput pins the two Oracle rates guarding a
+// direct-USD asset: USD per LUNC and USD per USTC. Either rate can move the
+// executable LUNC/USTC quote, so both must remain inside their TWAP bounds.
+func TestTWAPDeviationUsesEveryAssetInput(t *testing.T) {
 	input := CreateTestInput(t)
 
 	poolCoins := sdk.NewCoins(
@@ -527,7 +653,7 @@ func TestTWAPDeviationUsesMetaUSTRate(t *testing.T) {
 	// Build a TWAP history with both rates stable at 5
 	for h := int64(100); h < 105; h++ {
 		input.Ctx = input.Ctx.WithBlockHeight(h)
-		input.MarketKeeper.AfterOracleTally(input.Ctx)
+		input.MarketKeeper.AfterOracleTally(input.Ctx, 0, nil)
 	}
 
 	metaTWAP, err := input.MarketKeeper.ComputeTWAP(input.Ctx, oracletypes.MetaUSDDenom)
@@ -537,15 +663,16 @@ func TestTWAPDeviationUsesMetaUSTRate(t *testing.T) {
 	trader := Addrs[0]
 	offerCoin := sdk.NewCoin(core.MicroLunaDenom, sdkmath.NewInt(1000))
 
-	// Moving only the legacy uusd rate 20% does not trip the guard
+	// Moving USD/LUNC 20% above its TWAP trips the guard.
 	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, core.MicroUSDDenom, sdkmath.LegacyNewDec(6))
 	input.MarketKeeper.SetLastOracleTallyTime(input.Ctx, input.Ctx.BlockTime().Unix())
 
 	require.NoError(t, FundAccount(input, trader, sdk.NewCoins(offerCoin)))
 	_, err = msgServer.Swap(sdk.WrapSDKContext(input.Ctx), types.NewMsgSwap(trader, offerCoin, core.MicroUSDDenom))
-	require.NoError(t, err, "legacy uusd rate is not the USTC price and must not gate the swap")
+	require.ErrorIs(t, err, types.ErrTWAPDeviation)
 
-	// Moving the UST meta rate 20% above its TWAP does trip the guard
+	// Restoring USD/LUNC and moving USD/USTC 20% also trips the guard.
+	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, core.MicroUSDDenom, sdkmath.LegacyNewDec(5))
 	input.OracleKeeper.SetLunaExchangeRate(input.Ctx, oracletypes.MetaUSDDenom, sdkmath.LegacyNewDec(6))
 
 	require.NoError(t, FundAccount(input, trader, sdk.NewCoins(offerCoin)))

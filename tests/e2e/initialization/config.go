@@ -40,6 +40,7 @@ type NodeConfig struct {
 	SnapshotInterval   uint64 // statesync snapshot every Nth block (0 to disable)
 	SnapshotKeepRecent uint32 // number of recent snapshots to keep and serve (0 to keep all)
 	IsValidator        bool   // flag indicating whether a node should be a validator
+	StakeAmount        int64  // optional validator stake override; zero keeps the chain default
 }
 
 const (
@@ -346,20 +347,16 @@ func updateBankGenesis(bankGenState *banktypes.GenesisState) {
 }
 
 func updateMarketGenesis(marketGenState *markettypes.GenesisState) {
-	// WARNING: The values below are E2E-ONLY knobs tuned for fast test execution.
-	// They MUST NOT ship to mainnet/testnet genesis:
-	//   - EpochLengthBlocks=50 triggers an epoch burn+refill every ~2.5 minutes
-	//     (at 3s/block) instead of the 30-day production cadence.
-	//   - MaxOracleAgeSeconds=2 rejects any swap whose oracle data is older than
-	//     2 seconds, which would halt swaps on a real network.
-	// What keeps them out of production is that package initialization is imported
-	// only from tests/e2e; production genesis comes from markettypes.DefaultParams.
-	const (
-		e2eEpochLengthBlocks = 50
-		e2eMaxOracleAgeSecs  = 2
-	)
+	// WARNING: this E2E-only value triggers epoch processing every ~2.5 minutes
+	// instead of the production cadence. This package is imported only by tests;
+	// production genesis comes from markettypes.DefaultParams.
+	const e2eEpochLengthBlocks = 50
 	marketGenState.Params.EpochLengthBlocks = e2eEpochLengthBlocks
-	marketGenState.Params.MaxOracleAgeSeconds = e2eMaxOracleAgeSecs
+
+	// Keep the production freshness window. A two-second window is shorter than
+	// a multi-validator transaction round and makes otherwise valid E2E swaps
+	// timing-dependent. Staleness boundaries are covered by keeper tests.
+	marketGenState.Params.MaxOracleAgeSeconds = markettypes.DefaultMaxOracleAgeSeconds
 }
 
 func updateOracleGenesis(oracleGenState *oracletypes.GenesisState) {
@@ -394,6 +391,8 @@ func updateTreasuryGenesis(treasuryGenState *treasurytypes.GenesisState) {
 
 func updateGovGenesis(govGenState *govv1.GenesisState) {
 	govGenState.Params.VotingPeriod = &OneMin
+	expeditedVotingPeriod := 30 * time.Second
+	govGenState.Params.ExpeditedVotingPeriod = &expeditedVotingPeriod
 	govGenState.Params.Quorum = sdkmath.LegacyNewDecWithPrec(2, 1).String()
 	govGenState.Params.MinDeposit = tenTerra
 }
@@ -411,6 +410,9 @@ func updateGenUtilGenesis(c *internalChain) func(*genutiltypes.GenesisState) {
 			stakeAmountCoin := StakeAmountCoinA
 			if c.chainMeta.ID != ChainAID {
 				stakeAmountCoin = StakeAmountCoinB
+			}
+			if node.stakeAmount > 0 {
+				stakeAmountCoin = sdk.NewInt64Coin(TerraDenom, node.stakeAmount)
 			}
 			createValmsg, err := node.buildCreateValidatorMsg(stakeAmountCoin)
 			if err != nil {

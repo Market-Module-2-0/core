@@ -287,8 +287,17 @@ func CreateTestInput(t *testing.T) TestInput {
 		distrKeeper,
 	)
 	keeper.SetParams(ctx, types.DefaultParams())
-	// For tests, allow both USD and SDR to keep legacy tests working
-	keeper.SetAllowedSwapDenoms([]string{core.MicroUSDDenom, core.MicroSDRDenom})
+	keeper.SetMarketEnabled(ctx, true)
+	keeper.SetInitialActivationPending(ctx, false)
+	// Keep the production USTC definition and add SDR through the explicit
+	// legacy-rate mode required by historical Market unit tests.
+	testAssets := defaultMarketAssets()
+	testAssets = append(testAssets, MarketAssetConfig{
+		BankDenom:   core.MicroSDRDenom,
+		OracleDenom: core.MicroSDRDenom,
+		PriceSource: MarketAssetPriceLunaRate,
+	})
+	keeper.SetMarketAssets(testAssets)
 
 	return TestInput{ctx, legacyAmino, accountKeeper, bankKeeper, oracleKeeper, keeper}
 }
@@ -314,4 +323,18 @@ func FundModuleAccount(input TestInput, recipientModule string, amounts sdk.Coin
 	}
 
 	return input.BankKeeper.SendCoinsFromModuleToModule(input.Ctx, faucetAccountName, recipientModule, amounts)
+}
+
+// SeedCompleteTWAP stores a stable observation at the exact beginning of the
+// configured window. It is intentionally test-only: production history must be
+// built by completed Oracle tallies.
+func SeedCompleteTWAP(input *TestInput, prices map[string]sdkmath.LegacyDec) {
+	lookback := int64(input.MarketKeeper.TwapLookbackWindow(input.Ctx))
+	if input.Ctx.BlockHeight() < lookback {
+		input.Ctx = input.Ctx.WithBlockHeight(lookback)
+	}
+	historyCtx := input.Ctx.WithBlockHeight(input.Ctx.BlockHeight() - lookback)
+	for denom, price := range prices {
+		input.MarketKeeper.AddTWAPPrice(historyCtx, denom, price)
+	}
 }

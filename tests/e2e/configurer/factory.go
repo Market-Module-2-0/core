@@ -36,6 +36,7 @@ var (
 			SnapshotInterval:   25,
 			SnapshotKeepRecent: 10,
 			IsValidator:        true,
+			StakeAmount:        40_000_000_000,
 		},
 		{
 			Name:               "prune-nothing-snapshot",
@@ -45,6 +46,7 @@ var (
 			SnapshotInterval:   1500,
 			SnapshotKeepRecent: 2,
 			IsValidator:        true,
+			StakeAmount:        30_000_000_000,
 		},
 		{
 			Name:               "prune-custom-10000-13-snapshot",
@@ -54,6 +56,7 @@ var (
 			SnapshotInterval:   1500,
 			SnapshotKeepRecent: 2,
 			IsValidator:        true,
+			StakeAmount:        20_000_000_000,
 		},
 		{
 			Name:               "prune-everything-no-snapshot",
@@ -63,6 +66,7 @@ var (
 			SnapshotInterval:   0,
 			SnapshotKeepRecent: 0,
 			IsValidator:        true,
+			StakeAmount:        10_000_000_000,
 		},
 	}
 	validatorConfigsChainB = []*initialization.NodeConfig{

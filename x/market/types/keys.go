@@ -15,6 +15,10 @@ const (
 
 	// QuerierRoute is the query router key for the market module
 	QuerierRoute = ModuleName
+
+	// OracleQuorumMissedBlockLimit is the proposal-defined duration for which
+	// price voting power may remain below 50% before Market is disabled.
+	OracleQuorumMissedBlockLimit uint64 = 25
 )
 
 // Keys for market store
@@ -27,6 +31,10 @@ const (
 // - 0x23: int64 (block height)
 // - 0x24<denom>: sdk.Int (baseline balance per denom set at epoch change)
 // - 0x25<denom>: sdk.Int (daily usage per denom, resets each day)
+// - 0x26: bool (whether swaps are enabled)
+// - 0x27: bool (whether initial activation is waiting for an epoch boundary)
+// - 0x28: bool (whether swaps were stopped by the Oracle quorum guard)
+// - 0x29<denom>: uint64 (consecutive blocks below the Oracle quorum threshold)
 var (
 	// Keys for store prefixed
 	TerraPoolDeltaKey = []byte{0x01} // key for terra pool delta which gap between MintPool from BasePool
@@ -48,6 +56,19 @@ var (
 
 	// DailyCapUsageKey prefix for daily usage per denom (amount drained, resets daily)
 	DailyCapUsageKey = []byte{0x25}
+
+	// MarketEnabledKey stores whether swap transactions are enabled.
+	MarketEnabledKey = []byte{0x26}
+
+	// InitialActivationPendingKey stores whether the first post-upgrade
+	// activation is waiting for a fully collected epoch.
+	InitialActivationPendingKey = []byte{0x27}
+
+	// OracleHaltedKey stores whether the Oracle quorum guard disabled swaps.
+	OracleHaltedKey = []byte{0x28}
+
+	// OracleMissedBlocksKey prefixes the per-denom consecutive block counters.
+	OracleMissedBlocksKey = []byte{0x29}
 )
 
 // GetDailyCapBaselineKey returns the key for daily cap baseline for a given denom
@@ -63,4 +84,9 @@ func GetDailyCapUsageKey(denom string) []byte {
 // GetTWAPPriceKey returns the key for TWAP price snapshots for a given denom
 func GetTWAPPriceKey(denom string) []byte {
 	return append(TWAPPriceKey, []byte(denom)...)
+}
+
+// GetOracleMissedBlocksKey returns the Oracle quorum counter key for a denom.
+func GetOracleMissedBlocksKey(denom string) []byte {
+	return append(OracleMissedBlocksKey, []byte(denom)...)
 }

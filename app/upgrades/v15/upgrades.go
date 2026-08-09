@@ -7,11 +7,13 @@ import (
 	upgradetypes "cosmossdk.io/x/upgrade/types"
 	"github.com/classic-terra/core/v4/app/keepers"
 	"github.com/classic-terra/core/v4/app/upgrades"
+	core "github.com/classic-terra/core/v4/types"
 	markettypes "github.com/classic-terra/core/v4/x/market/types"
 	oracletypes "github.com/classic-terra/core/v4/x/oracle/types"
 	treasurytypes "github.com/classic-terra/core/v4/x/treasury/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
+	govv1 "github.com/cosmos/cosmos-sdk/x/gov/types/v1"
 )
 
 func CreateV15UpgradeHandler(
@@ -23,43 +25,94 @@ func CreateV15UpgradeHandler(
 	return func(ctx context.Context, _ upgradetypes.Plan, fromVM module.VersionMap) (module.VersionMap, error) {
 		sdkCtx := sdk.UnwrapSDKContext(ctx)
 
-		// Note: allowedSwapDenoms is deliberately not touched here. It is code-fixed to
-		// {uusd} by marketkeeper.NewKeeper and cannot be usefully changed at this point
+		// Guarantee that tax redirection and epoch refill target a real module
+		// account, including when the deterministic address already exists as a
+		// base account on a pre-MM2 chain.
+		k.MarketKeeper.EnsureMarketAccumulatorAccount(sdkCtx)
 
-		// Initialize the market params added in this upgrade.
-		marketParams := k.MarketKeeper.GetParams(sdkCtx)
-		marketParams.EpochLengthBlocks = markettypes.DefaultEpochLengthBlocks
-		marketParams.SwapFeeBurnRate = markettypes.DefaultSwapFeeBurnRate
-		marketParams.SwapFeeCommunityRate = markettypes.DefaultSwapFeeCommunityRate
-		marketParams.MaxOracleAgeSeconds = markettypes.DefaultMaxOracleAgeSeconds
-		marketParams.TwapLookbackWindow = markettypes.DefaultTWAPLookbackWindow
-		marketParams.MaxTwapDeviation = markettypes.DefaultMaxTWAPDeviation
-		marketParams.DailyCapFactor = markettypes.DefaultDailyCapFactor
+		// Preserve the legacy virtual-pool tuning while initializing every MM2
+		// parameter to the approved no-mint values.
+		marketParams := migrateMarketParams(k.MarketKeeper.GetParams(sdkCtx))
 		k.MarketKeeper.SetParams(sdkCtx, marketParams)
 
-		// Initialize TaxRedirectRate. It is a new treasury param added in this upgrade.
-		k.TreasuryKeeper.SetTaxRedirectRate(sdkCtx, treasurytypes.DefaultTaxRedirectRate)
-
-		// Ensure UST meta denom (oracle-only) is present in oracle vote targets.
-		// Existing chains won't pick up DefaultParams changes automatically, so patch params here.
-		params := k.OracleKeeper.GetParams(sdkCtx)
-		hasMeta := false
-		for _, d := range params.Whitelist {
-			if d.Name == oracletypes.MetaUSDDenom {
-				hasMeta = true
-				break
-			}
+		// Terra Classic uses uluna for governance deposits. Normalize both the
+		// regular and expedited paths because SDK defaults use the generic
+		// "stake" denom, which would otherwise block accelerated MM2 actions.
+		govParams, err := k.GovKeeper.Params.Get(sdkCtx)
+		if err != nil {
+			return nil, err
 		}
-		if !hasMeta {
+		govParams = migrateGovernanceParams(govParams)
+		if err := k.GovKeeper.Params.Set(sdkCtx, govParams); err != nil {
+			return nil, err
+		}
+
+		// Redirect 60% of tax proceeds into the next epoch's liquidity pool.
+		treasuryParams := migrateTreasuryParams(k.TreasuryKeeper.GetParams(sdkCtx))
+		k.TreasuryKeeper.SetParams(sdkCtx, treasuryParams)
+
+		// Deploy inactive and anchor a complete collection epoch. The epoch
+		// processor activates swaps only after both native pools are funded.
+		k.MarketKeeper.InitializeMarketForUpgrade(sdkCtx)
+
+		// Ensure every configured market price is an Oracle vote target. Existing
+		// chains do not pick up DefaultParams changes automatically, so the upgrade
+		// derives this list from the same registry used by swaps and TWAP.
+		params := k.OracleKeeper.GetParams(sdkCtx)
+		existingOracleDenoms := make(map[string]bool, len(params.Whitelist))
+		for _, d := range params.Whitelist {
+			existingOracleDenoms[d.Name] = true
+		}
+		var addedOracleDenoms []string
+		for _, asset := range k.MarketKeeper.MarketAssets() {
+			if existingOracleDenoms[asset.OracleDenom] {
+				continue
+			}
 			params.Whitelist = append(params.Whitelist, oracletypes.Denom{
-				Name:     oracletypes.MetaUSDDenom,
+				Name:     asset.OracleDenom,
 				TobinTax: sdkmath.LegacyZeroDec(),
 			})
+			existingOracleDenoms[asset.OracleDenom] = true
+			addedOracleDenoms = append(addedOracleDenoms, asset.OracleDenom)
+		}
+		if len(addedOracleDenoms) > 0 {
 			k.OracleKeeper.SetParams(sdkCtx, params)
-			// Set TobinTax immediately so it becomes a vote target without waiting a full period
-			k.OracleKeeper.SetTobinTax(sdkCtx, oracletypes.MetaUSDDenom, sdkmath.LegacyZeroDec())
+			for _, denom := range addedOracleDenoms {
+				// Set immediately so it becomes a vote target without waiting a full period.
+				k.OracleKeeper.SetTobinTax(sdkCtx, denom, sdkmath.LegacyZeroDec())
+			}
 		}
 
 		return mm.RunMigrations(ctx, cfg, fromVM)
 	}
+}
+
+func migrateMarketParams(current markettypes.Params) markettypes.Params {
+	migrated := markettypes.DefaultParams()
+	if !current.BasePool.IsNil() {
+		migrated.BasePool = current.BasePool
+	}
+	if current.PoolRecoveryPeriod != 0 {
+		migrated.PoolRecoveryPeriod = current.PoolRecoveryPeriod
+	}
+	return migrated
+}
+
+func migrateTreasuryParams(current treasurytypes.Params) treasurytypes.Params {
+	current.TaxRedirectRate = treasurytypes.DefaultTaxRedirectRate
+	return current
+}
+
+func migrateGovernanceParams(current govv1.Params) govv1.Params {
+	normalizeDepositDenom := func(coins []sdk.Coin) {
+		for i := range coins {
+			if coins[i].Denom == sdk.DefaultBondDenom {
+				coins[i].Denom = core.MicroLunaDenom
+			}
+		}
+	}
+
+	normalizeDepositDenom(current.MinDeposit)
+	normalizeDepositDenom(current.ExpeditedMinDeposit)
+	return current
 }

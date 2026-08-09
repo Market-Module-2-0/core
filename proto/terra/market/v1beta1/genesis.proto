@@ -18,4 +18,28 @@ message GenesisState {
     (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
     (gogoproto.nullable)   = false
   ];
+
+  // market_enabled is the activation/governance base state. Safety guards may
+  // still prevent swap execution while this value is true.
+  bool market_enabled = 3;
+
+  // initial_activation_pending is true while the first post-upgrade liquidity
+  // epoch is being collected.
+  bool initial_activation_pending = 4;
+
+  // last_epoch_height anchors the current burn/refill epoch.
+  int64 last_epoch_height = 5;
+
+  // oracle_halted is true when the Oracle quorum guard disabled swaps.
+  bool oracle_halted = 6;
+
+  // oracle_quorum_states persist consecutive sub-quorum block counters.
+  repeated OracleQuorumState oracle_quorum_states = 7
+      [(gogoproto.nullable) = false];
+}
+
+// OracleQuorumState is the persisted GAP-002 counter for one Oracle denom.
+message OracleQuorumState {
+  string oracle_denom = 1;
+  uint64 consecutive_missed_blocks = 2;
 }

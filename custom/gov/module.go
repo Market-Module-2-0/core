@@ -33,9 +33,12 @@ func (AppModuleBasic) RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) {
 // DefaultGenesis returns default genesis state as raw bytes for the gov
 // module.
 func (am AppModuleBasic) DefaultGenesis(cdc codec.JSONCodec) json.RawMessage {
-	// customize to set default genesis state deposit denom to uluna
+	// Customize both governance deposit paths for Terra Classic. Leaving the
+	// expedited path on the SDK's generic "stake" denom would make accelerated
+	// proposals impossible to fund with the chain's native token.
 	defaultGenesisState := v1.DefaultGenesisState()
 	defaultGenesisState.Params.MinDeposit[0].Denom = core.MicroLunaDenom
+	defaultGenesisState.Params.ExpeditedMinDeposit[0].Denom = core.MicroLunaDenom
 
 	return cdc.MustMarshalJSON(defaultGenesisState)
 }

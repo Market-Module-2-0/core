@@ -32,4 +32,12 @@ func TestParamsEqual(t *testing.T) {
 	p5 := DefaultParams()
 	require.NotNil(t, p5.ParamSetPairs())
 	require.NotNil(t, p5.String())
+
+	// The direct cap may be tightened but never raised above the proposal's
+	// absolute 10% daily ceiling.
+	p6 := DefaultParams()
+	p6.DailyCapFactor = sdkmath.LegacyMustNewDecFromStr("0.11")
+	require.Error(t, p6.Validate())
+	p6.DailyCapFactor = sdkmath.LegacyMustNewDecFromStr("0.07")
+	require.NoError(t, p6.Validate())
 }

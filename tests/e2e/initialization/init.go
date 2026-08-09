@@ -71,12 +71,22 @@ func InitChain(id, dataDir string, nodeConfigs []*NodeConfig, forkHeight int) (*
 
 	for _, node := range chain.nodes {
 		if node.isValidator {
-			if err := node.initNodeConfigs(peers); err != nil {
+			if err := node.initNodeConfigs(peersExcept(peers, node.peerID)); err != nil {
 				return nil, err
 			}
 		}
 	}
 	return chain.export(), nil
+}
+
+func peersExcept(peers []string, excludedPeer string) []string {
+	filtered := make([]string, 0, len(peers))
+	for _, peer := range peers {
+		if peer != excludedPeer {
+			filtered = append(filtered, peer)
+		}
+	}
+	return filtered
 }
 
 func InitSingleNode(chainID, dataDir string, existingGenesisDir string, nodeConfig *NodeConfig, trustHeight int64, trustHash string, stateSyncRPCServers []string, persistentPeers []string) (*Node, error) {

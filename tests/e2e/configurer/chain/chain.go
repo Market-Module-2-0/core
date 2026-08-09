@@ -13,7 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const StatusPassed = "PROPOSAL_STATUS_PASSED"
+const (
+	StatusVotingPeriod = "PROPOSAL_STATUS_VOTING_PERIOD"
+	StatusPassed       = "PROPOSAL_STATUS_PASSED"
+	StatusRejected     = "PROPOSAL_STATUS_REJECTED"
+)
 
 type Config struct {
 	initialization.ChainMeta

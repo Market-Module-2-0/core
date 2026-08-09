@@ -20,6 +20,16 @@ func TestSwap_InvalidPair(t *testing.T) {
 	require.ErrorIs(t, err, types.ErrInvalidSwapPair)
 }
 
+func TestSwap_MarketDisabled(t *testing.T) {
+	input := CreateTestInput(t)
+	input.MarketKeeper.SetMarketEnabled(input.Ctx, false)
+	server := NewMsgServerImpl(input.MarketKeeper)
+
+	msg := types.NewMsgSwap(Addrs[0], sdk.NewInt64Coin(core.MicroLunaDenom, 1_000_000), core.MicroUSDDenom)
+	_, err := server.Swap(sdk.WrapSDKContext(input.Ctx), msg)
+	require.ErrorIs(t, err, types.ErrMarketDisabled)
+}
+
 func TestSwap_OracleGuard_NoUSDMeta(t *testing.T) {
 	input := CreateTestInput(t)
 	server := NewMsgServerImpl(input.MarketKeeper)

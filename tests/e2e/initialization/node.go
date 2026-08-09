@@ -48,6 +48,7 @@ type internalNode struct {
 	nodeKey      p2p.NodeKey
 	peerID       string
 	isValidator  bool
+	stakeAmount  int64
 }
 
 func newNode(chain *internalChain, nodeConfig *NodeConfig) (*internalNode, error) {
@@ -55,6 +56,7 @@ func newNode(chain *internalChain, nodeConfig *NodeConfig) (*internalNode, error
 		chain:       chain,
 		moniker:     fmt.Sprintf("%s-node-%s", chain.chainMeta.ID, nodeConfig.Name),
 		isValidator: nodeConfig.IsValidator,
+		stakeAmount: nodeConfig.StakeAmount,
 	}
 	// generate genesis files
 	if err := node.init(); err != nil {

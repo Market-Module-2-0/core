@@ -4,6 +4,7 @@ VERSION := $(shell echo $(shell git describe --tags) | sed 's/^v//')
 COMMIT := $(shell git log -1 --format='%H')
 PACKAGES_E2E=$(shell go list ./... | grep '/e2e')
 BUILDDIR ?= $(CURDIR)/build
+E2E_PLATFORM ?= linux/$(shell go env GOARCH)
 
 test-e2e: e2e-setup test-e2e-ci
 
@@ -30,7 +31,7 @@ build-e2e-script:
 	go build -mod=readonly $(BUILD_FLAGS) -o $(BUILDDIR)/ ./tests/e2e/initialization/$(E2E_SCRIPT_NAME)
 
 docker-build-debug:
-	@DOCKER_BUILDKIT=1 docker build -t terra:${COMMIT} --platform linux/amd64 --build-arg BASE_IMG_TAG=debug -f ./tests/e2e/e2e.Dockerfile .
+	@DOCKER_BUILDKIT=1 docker build -t terra:${COMMIT} --platform $(E2E_PLATFORM) --build-arg BASE_IMG_TAG=debug -f ./tests/e2e/e2e.Dockerfile .
 	@DOCKER_BUILDKIT=1 docker tag terra:${COMMIT} terra:debug
 
 e2e-setup: e2e-check-image-sha e2e-remove-resources
