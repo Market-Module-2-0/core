@@ -27,13 +27,13 @@ The campaign strictly distinguishes:
 
 All existing Go test suites pass, together with the newly added No-Mint economic invariants. On the single-validator devnet, swaps correctly draw from the prefunded pool, fees follow the local test profile, caps are atomic, and epoch rotations burn residual balances without Market minting.
 
-This functional success is not yet sufficient to open the module to community testing. The three critical defects identified by the campaign have been corrected and revalidated locally: the `UST` rate contract, `market_accumulator` initialization, and the v15 migration with inactive deployment followed by deferred first activation. Draft reviews are now open for both the core changes and the feeder correction, but neither change is part of a released version. The upgrade must also be repeated against a representative pre-v15 snapshot.
+This functional success is not yet sufficient to open the module to community testing. The three critical defects identified by the campaign have been corrected and revalidated locally: the `UST` rate contract, `market_accumulator` initialization, and the v15 migration with inactive deployment followed by deferred first activation. Draft reviews are now open for both the core changes and the feeder correction, but neither change is part of a released version. The upgrade path has now also passed a process-level disk-state migration from an official pre-v15/v14_2 binary to the current MM2 binary, followed by real taxation, deferred activation, and bidirectional swaps. The source state was generated locally and is representative of the legacy layout; it is not a historical mainnet archive.
 
 The compliance audit also identified the absence of adaptive `base_pool` and `pool_recovery_period` calculations. This mechanism is now implemented and locally revalidated, while the direct per-asset cap remains a strict safety layer. A persistent halt after 25 blocks below 50% Oracle voting power, controlled recovery, and a true 45-block TWAP are also implemented and covered by deterministic tests.
 
 GAP-004 was ultimately reclassified. The existing governance brake already existed as `MinStabilitySpread = 100%`, the value historically used on Columbus-5. It closes swaps by producing a zero net output. The expedited governance route also has the required `0.667` threshold, but its minimum deposit still used the generic `stake` denom, which is unusable on Terra Classic. Custom genesis and the v15 migration now normalize both regular and expedited deposits to `uluna`. Closure, non-mutation, persistence, and reopening are tested.
 
-The `E2E-001` infrastructure blocker is also resolved. The official harness now starts four native ARM64 validators, confirms their P2P connections, and produces blocks. The baseline scenario builds a complete TWAP history through three Oracle cycles, then successfully executes LUNC → USTC and USTC → LUNC swaps. A second scenario assigns unequal validator powers of 40%, 30%, 20%, and 10% and validates the complete GAP-002 lifecycle: exactly 50% remains active, three commit/reveal rounds at 40% sustain an uninterrupted sub-quorum interval beyond the 25-block limit and halt swaps with committed Market code 10, and restored quorum re-enables swaps after TWAP reconstruction. A third scenario validates expedited governance with the same powers: 60% does not pass the `0.667` threshold, while 70% closes Market at a 100% spread and later reopens it at 0.35%. The verdict nevertheless remains **NO-GO** until the draft changes are reviewed and integrated and the upgrade is tested on a representative snapshot.
+The `E2E-001` infrastructure blocker is also resolved. The official harness now starts four native ARM64 validators, confirms their P2P connections, and produces blocks. The baseline scenario builds a complete TWAP history through three Oracle cycles, then successfully executes LUNC → USTC and USTC → LUNC swaps. A second scenario assigns unequal validator powers of 40%, 30%, 20%, and 10% and validates the complete GAP-002 lifecycle: exactly 50% remains active, three commit/reveal rounds at 40% sustain an uninterrupted sub-quorum interval beyond the 25-block limit and halt swaps with committed Market code 10, and restored quorum re-enables swaps after TWAP reconstruction. A third scenario validates expedited governance with the same powers: 60% does not pass the `0.667` threshold, while 70% closes Market at a 100% spread and later reopens it at 0.35%. A fourth operational scenario performs a real old-binary-to-new-binary v15 handoff on the same database. The verdict nevertheless remains **NO-GO** until the draft changes are reviewed, integrated, and released. A rehearsal from a sanitized historical mainnet archive remains recommended before any mainnet proposal, but the representative pre-v15 migration criterion is satisfied locally.
 
 ### 2. Frozen References
 
@@ -41,6 +41,8 @@ The `E2E-001` infrastructure blocker is also resolved. The official harness now 
 |---|---|
 | MM2.0 No-Mint proposal | `Market-Module-2-0/proposal@e576826a8163d4aacb64be0709822399dd970d5f` |
 | Terra Classic MM2 base | `c5bf7edb5628bb15a45d7c2a0744c74dd877ec14` plus the commits in draft core PR #3 |
+| Pre-v15 migration source | official v4/v14_2-compatible core at `9a5ee563874ce3906c3ca7069f0160de51f89c40` |
+| Tested migration target | `a0667e9cbad7d327ad473f018bda59e3e54be237` |
 | Local branch | `mm2-development` |
 | Source branch | `upstream/feat/mm-implementation` |
 | Core review | [Market-Module-2-0/core#3](https://github.com/Market-Module-2-0/core/pull/3), draft |
@@ -112,6 +114,7 @@ The node, its data, and its ports are isolated from any `terrad` installation on
 | E2E-001 | Multi-validator | Official four-validator harness, Oracle, TWAP, and bidirectional swaps | **RESOLVED — TARGETED TEST PASS** |
 | E2E-002 | Oracle quorum | Unequal powers, 50% boundary, 40% halt, and full recovery | **PASS — FOUR-VALIDATOR NETWORK** |
 | E2E-003 | Governance | Expedited 0.667 threshold, 100% spread closure, atomic rejection, and reopening | **PASS — FOUR-VALIDATOR NETWORK** |
+| E2E-004 | v15 disk-state migration | Real v14_2 binary stop, v15 binary handoff, taxation, activation, and bidirectional swaps | **PASS — REPRESENTATIVE PRE-v15 STATE** |
 | IMP-001 to IMP-007 | Improvements | Adaptive liquidity, epoch hardening, asset registry, Oracle auto-halt, true TWAP, and governance brake | **IMPLEMENTED LOCAL — TESTS PASS** |
 | GAP-002 | Oracle safety | Quorum auto-halt using persistent activation state | **RESOLVED LOCAL — MULTI-VALIDATOR E2E PASS** |
 | GAP-003 | TWAP | Truly weighted average and safe bootstrap phase | **RESOLVED LOCAL — TESTS PASS** |
@@ -313,7 +316,7 @@ The targeted suite passed in `494.51 s`; the scenario itself passed in `479.36 s
 | Governance | expedited closure at 0.667 and deferred activation | deterministic and four-validator E2E PASS; 60% fails and 70% closes/reopens |
 | Adaptive liquidity | recalculate `base_pool` and PRP at epoch | local PASS; 7% adaptive factor |
 | Resilience | restart and export/import | PASS, including default export |
-| Upgrade | migrate pre-MM2 state | local PASS from state missing new keys; real snapshot pending |
+| Upgrade | migrate pre-MM2 state | PASS from a representative v14_2 disk state with a real binary handoff, taxation, activation, and swaps |
 
 ### 8. Confirmed Issues and Corrections
 
@@ -505,7 +508,31 @@ go test -count=1 ./x/market/...
 go test -count=1 ./...
 ```
 
-The next operational validation must still run the binary against a representative pre-v15 snapshot, produce several post-upgrade blocks, and confirm the real tax flow over a simulated 30-day collection period. This does not reopen the locally closed deterministic defect, but it remains mandatory before a community release.
+##### Operational Disk-State Migration Evidence
+
+The deterministic migration test was complemented on August 9, 2026 by a process-level upgrade using two independently built binaries and one unchanged node home:
+
+- the source binary was built from the official v4/v14_2-compatible commit `9a5ee563874ce3906c3ca7069f0160de51f89c40`, which contains the legacy Market state and no v15 handler;
+- governance proposal 1 scheduled `v15` at height 30 and passed with 100% YES;
+- the legacy binary committed application height 29, reached CometBFT height 30, and stopped with the expected `UPGRADE v15 NEEDED` error;
+- the current binary, built from `a0667e9cbad7d327ad473f018bda59e3e54be237`, opened the same database without reinitialization, replayed height 30 through the v15 handler, and continued producing blocks through height 337 without panic;
+- legacy `BasePool = 1,000,000,000,000` and `PoolRecoveryPeriod = 14,400` were preserved at migration, while the new spread, epoch, fee, Oracle, TWAP, cap, tax-routing, governance-deposit, and activation keys were initialized;
+- `market_accumulator` was created as module account number 11 at its deterministic address.
+
+Real post-upgrade tax routing was then exercised at height 84. Transaction `DF11AC2AF5D247B5E94CF346D9162D03EBB83DF0ACD66CA51433BBB15A67B577` transferred `10,000,000,000 uluna` and `10,000,000,000 uusd` toward the accumulator. For each denom, the chain assessed `1,000,000` in tax and emitted the configured distribution: `600,000` to the accumulator, `360,000` burned, `39,200` to Oracle, and `800` to the Community Pool. The resulting accumulator balance was `9,999,600,000` of each reserve.
+
+To exercise the otherwise 432,000-block collection boundary within the local campaign, governance temporarily changed `EpochLengthBlocks` to 20. This was a test-only parameter change, not a proposed production default. With Oracle rates absent, the overdue first epoch remained unconsumed and Market remained disabled. After a valid Oracle commit/reveal cycle, height 214 cleared the quorum halt, moved both accumulated reserves into Market, recalculated adaptive liquidity, and completed first activation. This confirms that the Oracle safety guard and deferred activation compose without discarding the collected pool.
+
+The shortened epoch also made repeated burn/refill behavior observable. A final refill at height 334 supplied `999,600,000 uluna` and `999,600,000 uusd`. After ten consecutive Oracle rounds had covered the 45-block TWAP window, both post-migration swap directions committed successfully:
+
+| Height | Direction | Offer | Trader output | Fee | Transaction |
+|---:|---|---:|---:|---:|---|
+| 335 | LUNC → USTC | `1,000,000 uluna` | `899,999 uusd` | `100,001 uusd` | `728E02F876B1DCF6E1B7451044AD96B4E3237248C589292FC386C714F6BC92E4` |
+| 336 | USTC → LUNC | `500,000 uusd` | `498,250 uluna` | `1,750 uluna` | `305EC4CB451DB8BD48C9FECA857AB14297860C9942E0398BEF75EAC1B49F0CC1` |
+
+An export taken after height 337 recorded `market_enabled = true`, `initial_activation_pending = false`, and `oracle_halted = false`. Market held `1,000,100,000 uluna` and `999,100,000 uusd`, matching the two swap balance changes and fee exits.
+
+This closes the representative pre-v15 operational criterion for community-test readiness. The source volume was deliberately generated from the official compatible historical code so that the legacy layout and real database handoff were exercised, but it was not a historical mainnet archive. A separate rehearsal from a sanitized mainnet archive remains a prudent requirement before a mainnet upgrade proposal.
 
 ## Part II — Implemented Improvements
 
@@ -728,14 +755,14 @@ E2E-003 subsequently repeated the expedited path on a fresh four-validator netwo
 
 ### 10. Remaining Improvements
 
-Design gaps GAP-001 through GAP-004 are all addressed locally. No identified MM2 mechanism remains absent in this series. Open limitations concern publication, upgrade from a real snapshot, and long-running economic validation as described below.
+Design gaps GAP-001 through GAP-004 are all addressed locally. No identified MM2 mechanism remains absent in this series. Open limitations concern publication, rehearsal from a historical mainnet archive, and long-running economic validation as described below.
 
 ### 11. Campaign Limitations
 
 The base multi-validator harness, unequal-power Oracle outage scenario, and expedited governance brake are validated. The following points still need to be exercised by extending the harness or using a public environment:
 
 1. network TWAP revalidation with irregular prices and a changing majority;
-2. repetition of the corrected upgrade from a realistic pre-v15 snapshot, followed by activation at the next epoch;
+2. repetition of the now-passing upgrade campaign from a sanitized historical mainnet archive before any mainnet proposal;
 3. truly parallel load from multiple accounts and multiple proposers;
 4. a long economic campaign spanning several simulated production epochs.
 
@@ -747,7 +774,7 @@ These remaining tests do not change the current verdict. The P0 defects were rep
 
 1. Review and merge the feeder correction for `UST` (`USD per USTC`), then retain reciprocal integration coverage with the core.
 2. Review and merge the `InitGenesis` and upgrade correction that guarantees a real `market_accumulator` `ModuleAccount`, including address collisions.
-3. Review and merge the locally validated idempotent v15 migration, then repeat it against a representative pre-v15 snapshot.
+3. Review and merge the locally validated idempotent v15 migration, and retain the passing real binary-handoff campaign for the release candidate.
 4. Keep the blocking tests that require Market to remain disabled for a complete epoch and both reserves to be funded before first activation.
 
 #### P1 — Before a Mainnet Proposal
@@ -756,6 +783,7 @@ These remaining tests do not change the current verdict. The P0 defects were rep
 2. Review the local 25-block quorum auto-halt and retain the now-passing unequal-power network regression.
 3. Review the local weighted TWAP, then confirm network blocking during bootstrap and recovery on block 45.
 4. Review the expedited-deposit normalization to `uluna` and retain the now-passing 60%/70% multi-validator governance regression.
+5. Repeat the v15 handoff from a sanitized historical mainnet archive before submitting a mainnet upgrade proposal.
 
 #### P2 — Operational Quality
 
@@ -767,7 +795,7 @@ These remaining tests do not change the current verdict. The P0 defects were rep
 A future campaign may conclude “GO for community testnet” when:
 
 - each of the three P0 items has a regression test and its correction has been reviewed and published;
-- a pre-v15 upgrade produces blocks, taxes, and swaps without panic while Market starts disabled;
+- a pre-v15 upgrade produces blocks, taxes, and swaps without panic while Market starts disabled (**satisfied locally by E2E-004 on representative v14_2 disk state**);
 - LUNC/USTC quotes match the two raw USD prices in both directions;
 - the multi-validator network demonstrates halt, persistence, and recovery across quorum thresholds (**satisfied locally by E2E-002**);
 - the multi-validator network demonstrates expedited closure at 100%, persistence, and reopening at 0.35% with `uluna` deposits (**satisfied locally by E2E-003**);
@@ -785,4 +813,4 @@ The No-Mint core demonstrates a promising foundation: transfers from a real pool
 
 The code is nevertheless not yet ready for public community testing. `INT-001`, `INT-002`, `INT-003`, and `GAP-001` through `GAP-004` are corrected or reclassified and locally validated, and their draft reviews are open. They still require maintainer review, merge, and release. The Oracle/TWAP/Market path now operates across four unequal-power local validators through healthy operation, persistent quorum loss, recovery, expedited governance closure, and reopening. The proposal's 10% example should also be clarified.
 
-**Recommended decision: community NO-GO in the current state.** The next reasonable steps are review and integration of the draft changes, an upgrade test against a representative snapshot, and longer economic validation. This report provides the baseline and criteria needed to measure that progress unambiguously.
+**Recommended decision: community NO-GO in the current state.** The next reasonable steps are maintainer review, integration, and release of the draft changes, followed by longer economic validation. A sanitized historical-mainnet rehearsal should also precede any mainnet proposal. This report provides the baseline and criteria needed to measure that progress unambiguously.
