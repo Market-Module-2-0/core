@@ -33,7 +33,7 @@ The compliance audit also identified the absence of adaptive `base_pool` and `po
 
 GAP-004 was ultimately reclassified. The existing governance brake already existed as `MinStabilitySpread = 100%`, the value historically used on Columbus-5. It closes swaps by producing a zero net output. The expedited governance route also has the required `0.667` threshold, but its minimum deposit still used the generic `stake` denom, which is unusable on Terra Classic. Custom genesis and the v15 migration now normalize both regular and expedited deposits to `uluna`. Closure, non-mutation, persistence, and reopening are tested.
 
-The `E2E-001` infrastructure blocker is also resolved. The official harness now starts four native ARM64 validators, confirms their P2P connections, and produces blocks. The baseline scenario builds a complete TWAP history through three Oracle cycles, then successfully executes LUNC → USTC and USTC → LUNC swaps. A second scenario now assigns unequal validator powers of 40%, 30%, 20%, and 10% and validates the complete GAP-002 lifecycle: exactly 50% remains active, three commit/reveal rounds at 40% sustain an uninterrupted sub-quorum interval beyond the 25-block limit and halt swaps with committed Market code 10, and restored quorum re-enables swaps after TWAP reconstruction. The verdict nevertheless remains **NO-GO** until the draft changes are reviewed and integrated, the upgrade is tested on a real snapshot, and multi-validator governance transitions are validated.
+The `E2E-001` infrastructure blocker is also resolved. The official harness now starts four native ARM64 validators, confirms their P2P connections, and produces blocks. The baseline scenario builds a complete TWAP history through three Oracle cycles, then successfully executes LUNC → USTC and USTC → LUNC swaps. A second scenario assigns unequal validator powers of 40%, 30%, 20%, and 10% and validates the complete GAP-002 lifecycle: exactly 50% remains active, three commit/reveal rounds at 40% sustain an uninterrupted sub-quorum interval beyond the 25-block limit and halt swaps with committed Market code 10, and restored quorum re-enables swaps after TWAP reconstruction. A third scenario validates expedited governance with the same powers: 60% does not pass the `0.667` threshold, while 70% closes Market at a 100% spread and later reopens it at 0.35%. The verdict nevertheless remains **NO-GO** until the draft changes are reviewed and integrated and the upgrade is tested on a representative snapshot.
 
 ### 2. Frozen References
 
@@ -111,10 +111,11 @@ The node, its data, and its ports are isolated from any `terrad` installation on
 | RES-002 | Export/import | Complete export and restart from a clean home | PASS — default export fixed locally |
 | E2E-001 | Multi-validator | Official four-validator harness, Oracle, TWAP, and bidirectional swaps | **RESOLVED — TARGETED TEST PASS** |
 | E2E-002 | Oracle quorum | Unequal powers, 50% boundary, 40% halt, and full recovery | **PASS — FOUR-VALIDATOR NETWORK** |
+| E2E-003 | Governance | Expedited 0.667 threshold, 100% spread closure, atomic rejection, and reopening | **PASS — FOUR-VALIDATOR NETWORK** |
 | IMP-001 to IMP-007 | Improvements | Adaptive liquidity, epoch hardening, asset registry, Oracle auto-halt, true TWAP, and governance brake | **IMPLEMENTED LOCAL — TESTS PASS** |
 | GAP-002 | Oracle safety | Quorum auto-halt using persistent activation state | **RESOLVED LOCAL — MULTI-VALIDATOR E2E PASS** |
 | GAP-003 | TWAP | Truly weighted average and safe bootstrap phase | **RESOLVED LOCAL — TESTS PASS** |
-| GAP-004 | Governance | Closure and reopening through historical spread, expedited path, and persistence | **RESOLVED LOCAL — TESTS PASS** |
+| GAP-004 | Governance | Closure and reopening through historical spread, expedited path, and persistence | **RESOLVED LOCAL — MULTI-VALIDATOR E2E PASS** |
 | CORE-001 | Operations | `terrad export` without a module list | **RESOLVED LOCAL — TESTS PASS** |
 
 `ENV-001` and `ENV-002` are not functional MM2 failures. `E2E-001` was an infrastructure defect and is now resolved. `CORE-001`, now corrected locally, belongs to general application operation rather than MM2 economic logic.
@@ -250,7 +251,7 @@ On August 8, 2026, the targeted test passed in `138.61 s` on four `linux/arm64` 
 
 After the harness adopted the 40% / 30% / 20% / 10% validator distribution for E2E-002, this bidirectional baseline was replayed on August 9, 2026. The scenario passed again in `128.45 s`, confirming that unequal voting power did not regress the healthy Oracle, TWAP, or two-way swap path.
 
-`E2E-001` is therefore closed as an infrastructure defect. This original evidence covers consensus → Oracle → TWAP → Market with four equal-power validators. Governance closure and the full E2E suite with IBC and state sync remain outside that baseline.
+`E2E-001` is therefore closed as an infrastructure defect. This original evidence covers consensus → Oracle → TWAP → Market with four equal-power validators. Governance closure is covered separately by E2E-003; the full E2E suite with IBC and state sync remains outside this baseline.
 
 #### E2E-002 — Unequal-Power Oracle Quorum Halt and Recovery
 
@@ -275,6 +276,25 @@ The scenario produced the following sequence on a live chain:
 
 The targeted suite passed in `413.35 s`; the scenario itself passed in `397.34 s`. This closes the outstanding multi-validator outage validation for GAP-002. It also proves the exact 50% boundary and recovery behavior with real weighted staking power rather than mocked keeper state.
 
+#### E2E-003 — Multi-Validator Expedited Governance Brake
+
+**Status: PASS**
+
+On August 9, 2026, `TestMarketExpeditedGovernanceBrake` passed on the same four-validator ARM64 harness with bonded powers of 40%, 30%, 20%, and 10%. The test used fully funded expedited v1 proposals carrying legacy `market/MinStabilitySpread` parameter-change content and the corrected `uluna` expedited deposit.
+
+The live-chain sequence was:
+
+1. all validators built a complete Oracle/TWAP history and a baseline LUNC → USTC swap succeeded with the approved `0.0035` spread;
+2. validators representing 60% voted YES and 40% voted NO on a proposal to set the spread to `1`; this did not pass the `0.667` expedited threshold, the proposal was converted to the regular path, and Market remained at `0.0035`;
+3. because the SDK consumes expedited votes during conversion, all four validators cast a fresh regular vote at 40% YES and 60% NO; the proposal was rejected and Market again remained unchanged;
+4. a new expedited proposal received 70% YES and 30% NO, passed, and changed the on-chain spread to `1`;
+5. after an independent Oracle/TWAP rebuild, a swap committed with Market code 4 (`zero swap coin`), while trader and Market LUNC/USTC balances remained unchanged;
+6. a second 70%/30% expedited proposal restored `0.0035`; after TWAP reconstruction, the swap committed with code 0 and increased the trader's USTC balance.
+
+The first execution of the scenario revealed the SDK vote-consumption behavior during expedited-to-regular conversion. This was a test-harness assumption rather than an MM2 defect. The final scenario explicitly requires a new multi-validator vote after conversion, making the operational behavior reproducible and visible to reviewers.
+
+The targeted suite passed in `494.51 s`; the scenario itself passed in `479.36 s`. This closes the outstanding multi-validator governance validation for GAP-004 and brackets the expedited threshold with real staking power: 60% fails while 70% passes.
+
 ### 7. Validation Matrix
 
 | Area | Main requirement | Current level |
@@ -290,7 +310,7 @@ The targeted suite passed in `413.35 s`; the scenario itself passed in `397.34 s
 | TWAP | reject above 10% of a truly weighted 45-block TWAP | deterministic PASS; incomplete history rejected |
 | Daily cap | maximum 10% and reset | E2E PASS for excess rejection |
 | Quorum | halt below 50% power for 25 blocks | deterministic PASS and four-validator unequal-power E2E PASS, including 50% boundary, halt, and recovery |
-| Governance | expedited closure at 0.667 and deferred activation | local PASS; historical mechanism reused, multi-validator E2E pending |
+| Governance | expedited closure at 0.667 and deferred activation | deterministic and four-validator E2E PASS; 60% fails and 70% closes/reopens |
 | Adaptive liquidity | recalculate `base_pool` and PRP at epoch | local PASS; 7% adaptive factor |
 | Resilience | restart and export/import | PASS, including default export |
 | Upgrade | migrate pre-MM2 state | local PASS from state missing new keys; real snapshot pending |
@@ -702,21 +722,22 @@ On the persistent devnet, two regular proposals validated the complete network p
 | 1 | `0.0035` to `1` | `PASSED`, `YES` power: `900,000,000,000` | `344A0A20…90DB` |
 | 2 | `1` to `0.0035` | `PASSED`, `YES` power: `900,000,000,000` | `FEAEC621…E614` |
 
-The node was restarted after proposal 2 and retained `0.0035`. The expedited path was not replayed on this older volume because its state specifically retained the incorrect `stake` deposit; it is covered by the full integration test and the corrected v15 migration. A multi-validator repetition must still verify the exact tally boundary: `0.667` is the SDK value used to represent the two-thirds rule.
+The node was restarted after proposal 2 and retained `0.0035`. The expedited path was not replayed on this older volume because its state specifically retained the incorrect `stake` deposit; it is covered by the full integration test and the corrected v15 migration.
+
+E2E-003 subsequently repeated the expedited path on a fresh four-validator network. Its 60%/40% vote did not pass the `0.667` expedited threshold and caused no parameter mutation. Separate 70%/30% votes then closed and reopened Market. The test also documents that expedited-to-regular conversion consumes the first votes and therefore requires validators to vote again during the regular period.
 
 ### 10. Remaining Improvements
 
-Design gaps GAP-001 through GAP-004 are all addressed locally. No identified MM2 mechanism remains absent in this series. Open limitations concern publication, upgrade from a real snapshot, multi-validator validation, and long-running economic validation as described below.
+Design gaps GAP-001 through GAP-004 are all addressed locally. No identified MM2 mechanism remains absent in this series. Open limitations concern publication, upgrade from a real snapshot, and long-running economic validation as described below.
 
 ### 11. Campaign Limitations
 
-The base multi-validator harness and the unequal-power Oracle outage scenario are validated. The following points still need to be exercised by extending the harness or using a public environment:
+The base multi-validator harness, unequal-power Oracle outage scenario, and expedited governance brake are validated. The following points still need to be exercised by extending the harness or using a public environment:
 
 1. network TWAP revalidation with irregular prices and a changing majority;
 2. repetition of the corrected upgrade from a realistic pre-v15 snapshot, followed by activation at the next epoch;
 3. truly parallel load from multiple accounts and multiple proposers;
-4. a long economic campaign spanning several simulated production epochs;
-5. expedited closure and reopening across multiple validators, including the exact `0.667` threshold boundary.
+4. a long economic campaign spanning several simulated production epochs.
 
 These remaining tests do not change the current verdict. The P0 defects were reproducible or deterministic from the execution path and are now corrected locally.
 
@@ -734,8 +755,7 @@ These remaining tests do not change the current verdict. The P0 defects were rep
 1. Review the local `base_pool`/PRP implementation with its 7% adaptive / 10% strict-cap separation, then replay it across several epochs.
 2. Review the local 25-block quorum auto-halt and retain the now-passing unequal-power network regression.
 3. Review the local weighted TWAP, then confirm network blocking during bootstrap and recovery on block 45.
-4. Review the expedited-deposit normalization to `uluna`, then replay closure and reopening through `MinStabilitySpread` on the multi-validator harness.
-5. Extend the repaired multi-validator harness with blocking assertions for governance transitions.
+4. Review the expedited-deposit normalization to `uluna` and retain the now-passing 60%/70% multi-validator governance regression.
 
 #### P2 — Operational Quality
 
@@ -750,7 +770,7 @@ A future campaign may conclude “GO for community testnet” when:
 - a pre-v15 upgrade produces blocks, taxes, and swaps without panic while Market starts disabled;
 - LUNC/USTC quotes match the two raw USD prices in both directions;
 - the multi-validator network demonstrates halt, persistence, and recovery across quorum thresholds (**satisfied locally by E2E-002**);
-- the multi-validator network demonstrates expedited closure at 100%, persistence, and reopening at 0.35% with `uluna` deposits;
+- the multi-validator network demonstrates expedited closure at 100%, persistence, and reopening at 0.35% with `uluna` deposits (**satisfied locally by E2E-003**);
 - the 7% adaptive / 10% strict-cap separation is documented, liquidity adaptation satisfies proposal bounds over several epochs, and the TWAP is truly duration-weighted.
 
 ### 14. Confidentiality and Reproducibility
@@ -763,6 +783,6 @@ The Docker devnet is external to the MM2 repository. The initial campaign node u
 
 The No-Mint core demonstrates a promising foundation: transfers from a real pool, absence of Market minting, fee and epoch-end burns, 60% tax routing, caps, and atomic rejections all work in the local profile. Go suites and fuzzing revealed no general regression.
 
-The code is nevertheless not yet ready for public community testing. `INT-001`, `INT-002`, `INT-003`, and `GAP-001` through `GAP-004` are corrected or reclassified and locally validated, and their draft reviews are open. They still require maintainer review, merge, and release. The Oracle/TWAP/Market path now operates across four unequal-power local validators through healthy operation, persistent quorum loss, and recovery, but governance transitions remain unvalidated at that level. The proposal's 10% example should also be clarified.
+The code is nevertheless not yet ready for public community testing. `INT-001`, `INT-002`, `INT-003`, and `GAP-001` through `GAP-004` are corrected or reclassified and locally validated, and their draft reviews are open. They still require maintainer review, merge, and release. The Oracle/TWAP/Market path now operates across four unequal-power local validators through healthy operation, persistent quorum loss, recovery, expedited governance closure, and reopening. The proposal's 10% example should also be clarified.
 
-**Recommended decision: community NO-GO in the current state.** The next reasonable steps are review and integration of the draft changes, an upgrade test against a representative snapshot, and extension of the multi-validator campaign to governance scenarios. This report provides the baseline and criteria needed to measure that progress unambiguously.
+**Recommended decision: community NO-GO in the current state.** The next reasonable steps are review and integration of the draft changes, an upgrade test against a representative snapshot, and longer economic validation. This report provides the baseline and criteria needed to measure that progress unambiguously.

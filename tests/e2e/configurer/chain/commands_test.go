@@ -42,3 +42,23 @@ func TestFindModuleAccountAddressNotFound(t *testing.T) {
 	_, err := findModuleAccountAddress([]byte(`{"accounts":[]}`), "market")
 	require.EqualError(t, err, "module market not found in module-accounts")
 }
+
+func TestExtractProposalIDFromResponse(t *testing.T) {
+	payload := `{
+		"height":"42",
+		"txhash":"ABC",
+		"events":[{
+			"type":"submit_proposal",
+			"attributes":[{"key":"proposal_id","value":"7"}]
+		}]
+	}`
+
+	proposalID, err := extractProposalIDFromResponse(payload)
+	require.NoError(t, err)
+	require.Equal(t, 7, proposalID)
+}
+
+func TestExtractProposalIDFromResponseNotFound(t *testing.T) {
+	_, err := extractProposalIDFromResponse(`{"height":"42","events":[]}`)
+	require.EqualError(t, err, "proposal_id not found in transaction response")
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/classic-terra/core/v4/tests/e2e/containers"
 	"github.com/classic-terra/core/v4/tests/e2e/initialization"
 	"github.com/classic-terra/core/v4/types/assets"
+	markettypes "github.com/classic-terra/core/v4/x/market/types"
 	"github.com/cometbft/cometbft/libs/bytes"
 	"github.com/cometbft/cometbft/p2p"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
@@ -23,6 +25,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
+	govv1 "github.com/cosmos/cosmos-sdk/x/gov/types/v1"
 	"github.com/stretchr/testify/require"
 )
 
@@ -262,6 +265,68 @@ func (n *NodeConfig) SubmitParamChangeProposal(proposalJSON, from string) {
 	require.NoError(n.t, err)
 
 	n.LogActionF("successfully submitted param change proposal")
+}
+
+// SubmitExpeditedMarketSpreadProposal submits a fully funded v1 governance
+// proposal that changes the existing Market brake parameter. The v1 envelope
+// is required to mark the legacy parameter-change content as expedited.
+func (n *NodeConfig) SubmitExpeditedMarketSpreadProposal(spread, from string) int {
+	n.LogActionF("submitting expedited Market spread proposal: %s", spread)
+	authority := authtypes.NewModuleAddress(govtypes.ModuleName).String()
+	deposit := sdk.NewCoin(
+		initialization.TerraDenom,
+		govv1.DefaultMinExpeditedDepositTokens,
+	).String()
+	proposal := map[string]any{
+		"messages": []any{
+			map[string]any{
+				"@type": "/cosmos.gov.v1.MsgExecLegacyContent",
+				"content": map[string]any{
+					"@type":       "/cosmos.params.v1beta1.ParameterChangeProposal",
+					"title":       "MM2 Market brake",
+					"description": "Set the existing minimum stability spread through expedited governance.",
+					"changes": []any{
+						map[string]any{
+							"subspace": markettypes.ModuleName,
+							"key":      string(markettypes.KeyMinStabilitySpread),
+							"value":    fmt.Sprintf("%q", spread),
+						},
+					},
+				},
+				"authority": authority,
+			},
+		},
+		"metadata":  "",
+		"deposit":   deposit,
+		"title":     "MM2 Market brake",
+		"summary":   fmt.Sprintf("Set the minimum stability spread to %s.", spread),
+		"expedited": true,
+	}
+
+	bz, err := json.Marshal(proposal)
+	require.NoError(n.t, err)
+	wd, err := os.Getwd()
+	require.NoError(n.t, err)
+	f, err := os.CreateTemp(filepath.Join(wd, "scripts"), "market_spread_proposal_*.json")
+	require.NoError(n.t, err)
+	localProposalFile := f.Name()
+	defer os.Remove(localProposalFile)
+	_, err = f.Write(bz)
+	require.NoError(n.t, err)
+	require.NoError(n.t, f.Close())
+
+	containerProposalFile := filepath.Join("/terra", filepath.Base(localProposalFile))
+	cmd := []string{
+		"terrad", "tx", "gov", "submit-proposal", containerProposalFile,
+		fmt.Sprintf("--from=%s", from),
+	}
+	resp, _, err := n.containerManager.ExecTxCmd(n.t, n.chainID, n.Name, cmd)
+	require.NoError(n.t, err)
+	proposalID, err := extractProposalIDFromResponse(resp.String())
+	require.NoError(n.t, err)
+
+	n.LogActionF("successfully submitted expedited Market spread proposal %d", proposalID)
+	return proposalID
 }
 
 func (n *NodeConfig) SubmitAddBurnTaxExemptionAddressProposalV1(addresses []string, walletName string) int {
@@ -568,19 +633,54 @@ func AllValsVoteOnProposal(chain *Config, propNumber int) {
 }
 
 func extractProposalIDFromResponse(response string) (int, error) {
-	// Extract the proposal ID from the response
-	startIndex := strings.Index(response, `[{"key":"proposal_id","value":"`) + len(`[{"key":"proposal_id","value":"`)
-	endIndex := strings.Index(response[startIndex:], `"`)
-
-	// Extract the proposal ID substring
-	proposalIDStr := response[startIndex : startIndex+endIndex]
-
-	// Convert the proposal ID from string to int
-	proposalID, err := strconv.Atoi(proposalIDStr)
-	if err != nil {
-		return 0, err
+	var payload any
+	if err := json.Unmarshal([]byte(response), &payload); err != nil {
+		return 0, fmt.Errorf("decode proposal transaction response: %w", err)
 	}
 
+	var findProposalID func(any) (string, bool)
+	findProposalID = func(value any) (string, bool) {
+		switch typed := value.(type) {
+		case map[string]any:
+			if key, ok := typed["key"].(string); ok && key == "proposal_id" {
+				switch proposalID := typed["value"].(type) {
+				case string:
+					return proposalID, true
+				case float64:
+					return strconv.FormatInt(int64(proposalID), 10), true
+				}
+			}
+			if proposalID, ok := typed["proposal_id"]; ok {
+				switch value := proposalID.(type) {
+				case string:
+					return value, true
+				case float64:
+					return strconv.FormatInt(int64(value), 10), true
+				}
+			}
+			for _, nested := range typed {
+				if proposalID, ok := findProposalID(nested); ok {
+					return proposalID, true
+				}
+			}
+		case []any:
+			for _, nested := range typed {
+				if proposalID, ok := findProposalID(nested); ok {
+					return proposalID, true
+				}
+			}
+		}
+		return "", false
+	}
+
+	proposalIDStr, ok := findProposalID(payload)
+	if !ok {
+		return 0, fmt.Errorf("proposal_id not found in transaction response")
+	}
+	proposalID, err := strconv.Atoi(proposalIDStr)
+	if err != nil {
+		return 0, fmt.Errorf("invalid proposal_id %q: %w", proposalIDStr, err)
+	}
 	return proposalID, nil
 }
 

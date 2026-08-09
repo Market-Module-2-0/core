@@ -3,6 +3,7 @@ package e2e
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/classic-terra/core/v4/tests/e2e/configurer/chain"
 	"github.com/classic-terra/core/v4/tests/e2e/initialization"
@@ -205,4 +206,165 @@ func (s *IntegrationTestSuite) TestMarketOracleQuorumHaltRecovery() {
 	s.Require().True(postUSD.Amount.GT(preUSD.Amount))
 
 	node.LogActionF("Market Oracle quorum E2E passed: 50%% stayed active, 40%% halted swaps, and full quorum restored them")
+}
+
+// TestMarketExpeditedGovernanceBrake validates the accelerated governance
+// boundary and the historical Market brake across four unequal-power
+// validators. A 60% vote must not pass the 66.7% expedited threshold, while a
+// 70% vote must be able to close and subsequently reopen swaps.
+func (s *IntegrationTestSuite) TestMarketExpeditedGovernanceBrake() {
+	chainConfig := s.configurer.GetChainConfig(0)
+	node, err := chainConfig.GetDefaultNode()
+	s.Require().NoError(err)
+	chainConfig.WaitForNumHeights(1)
+
+	expectedStakes := []int64{40_000_000_000, 30_000_000_000, 20_000_000_000, 10_000_000_000}
+	s.Require().Len(chainConfig.NodeConfigs, len(expectedStakes))
+	for index, expected := range expectedStakes {
+		actual, err := node.QueryValidatorTokens(chainConfig.NodeConfigs[index].OperatorAddress)
+		s.Require().NoError(err)
+		s.Require().Equal(expected, actual)
+	}
+
+	const closedSpread = "1.000000000000000000"
+	openSpread := markettypes.DefaultMinStabilitySpread.String()
+	marketAddress := node.GetModuleAccountAddress(markettypes.ModuleName)
+	validatorAddr := node.GetWallet(initialization.ValidatorWalletName)
+
+	querySpread := func() string {
+		spread, err := node.QueryMarketMinStabilitySpread()
+		s.Require().NoError(err)
+		return spread
+	}
+	waitForProposal := func(proposalID int, predicate func(chain.GovernanceProposal) bool) chain.GovernanceProposal {
+		var proposal chain.GovernanceProposal
+		s.Require().Eventually(func() bool {
+			queried, err := node.QueryGovernanceProposal(proposalID)
+			if err != nil {
+				return false
+			}
+			proposal = queried
+			return predicate(proposal)
+		}, 2*time.Minute, time.Second)
+		return proposal
+	}
+	vote := func(proposalID int, yesValidatorIndexes ...int) {
+		yes := make(map[int]struct{}, len(yesValidatorIndexes))
+		for _, index := range yesValidatorIndexes {
+			yes[index] = struct{}{}
+		}
+		for index, validator := range chainConfig.NodeConfigs {
+			if _, ok := yes[index]; ok {
+				validator.VoteYesProposal(initialization.ValidatorWalletName, proposalID)
+			} else {
+				validator.VoteNoProposal(initialization.ValidatorWalletName, proposalID)
+			}
+		}
+	}
+	assertTally := func(proposal chain.GovernanceProposal, yes, no int64) {
+		s.Require().NotNil(proposal.FinalTallyResult)
+		s.Require().Equal(fmt.Sprintf("%d", yes), proposal.FinalTallyResult.YesCount)
+		s.Require().Equal(fmt.Sprintf("%d", no), proposal.FinalTallyResult.NoCount)
+		s.Require().Equal("0", proposal.FinalTallyResult.AbstainCount)
+		s.Require().Equal("0", proposal.FinalTallyResult.NoWithVetoCount)
+	}
+	fundActivePool := func() {
+		node.BankSend("20000000uluna", validatorAddr, marketAddress)
+		node.BankSend("20000000uusd", validatorAddr, marketAddress)
+	}
+	rebuildTWAP := func(roundBase int) {
+		for round := 1; round <= 3; round++ {
+			s.runMarketOracleRound(chainConfig, node, roundBase+round)
+		}
+	}
+
+	s.Require().Equal(openSpread, querySpread())
+	rebuildTWAP(300)
+	fundActivePool()
+	node.MarketSwap("100000uluna", coreassets.MicroUSDDenom, initialization.ValidatorWalletName)
+
+	// 40% + 20% YES is below the 66.7% expedited threshold. The SDK must
+	// convert the proposal to the regular path without mutating Market.
+	boundaryProposalID := node.SubmitExpeditedMarketSpreadProposal(closedSpread, initialization.ValidatorWalletName)
+	vote(boundaryProposalID, 0, 2)
+	boundaryProposal := waitForProposal(boundaryProposalID, func(proposal chain.GovernanceProposal) bool {
+		return proposal.Status == chain.StatusVotingPeriod && !proposal.Expedited && proposal.FinalTallyResult != nil
+	})
+	assertTally(boundaryProposal, 60_000_000_000, 40_000_000_000)
+	s.Require().Equal(openSpread, querySpread(), "a failed expedited tally must not mutate Market")
+
+	// Expedited tallying consumes the first set of votes before conversion.
+	// Cast a fresh 40/60 vote during the regular period so the proposal is
+	// rejected instead of later passing under the 50% threshold.
+	vote(boundaryProposalID, 0)
+	boundaryProposal = waitForProposal(boundaryProposalID, func(proposal chain.GovernanceProposal) bool {
+		return proposal.Status == chain.StatusRejected
+	})
+	assertTally(boundaryProposal, 40_000_000_000, 60_000_000_000)
+	s.Require().Equal(openSpread, querySpread())
+
+	// 40% + 30% YES exceeds the accelerated threshold and closes Market.
+	closeProposalID := node.SubmitExpeditedMarketSpreadProposal(closedSpread, initialization.ValidatorWalletName)
+	vote(closeProposalID, 0, 1)
+	closeProposal := waitForProposal(closeProposalID, func(proposal chain.GovernanceProposal) bool {
+		return proposal.Status == chain.StatusPassed
+	})
+	s.Require().True(closeProposal.Expedited)
+	assertTally(closeProposal, 70_000_000_000, 30_000_000_000)
+	s.Require().Equal(closedSpread, querySpread())
+
+	// Rebuild Oracle/TWAP independently from governance, then prove the 100%
+	// spread is the reason for rejection and that the failed tx is atomic.
+	rebuildTWAP(310)
+	fundActivePool()
+	traderLunaBefore, err := node.QuerySpecificBalance(validatorAddr, initialization.TerraDenom)
+	s.Require().NoError(err)
+	traderUSDBefore, err := node.QuerySpecificBalance(validatorAddr, coreassets.MicroUSDDenom)
+	s.Require().NoError(err)
+	marketLunaBefore, err := node.QuerySpecificBalance(marketAddress, initialization.TerraDenom)
+	s.Require().NoError(err)
+	marketUSDBefore, err := node.QuerySpecificBalance(marketAddress, coreassets.MicroUSDDenom)
+	s.Require().NoError(err)
+
+	closedSwap := node.MarketSwapExpectCode(
+		"100000uluna",
+		coreassets.MicroUSDDenom,
+		initialization.ValidatorWalletName,
+		4,
+	)
+	s.Require().Equal(markettypes.ModuleName, closedSwap.Codespace)
+	s.Require().Contains(closedSwap.RawLog, markettypes.ErrZeroSwapCoin.Error())
+	traderLunaAfter, err := node.QuerySpecificBalance(validatorAddr, initialization.TerraDenom)
+	s.Require().NoError(err)
+	traderUSDAfter, err := node.QuerySpecificBalance(validatorAddr, coreassets.MicroUSDDenom)
+	s.Require().NoError(err)
+	marketLunaAfter, err := node.QuerySpecificBalance(marketAddress, initialization.TerraDenom)
+	s.Require().NoError(err)
+	marketUSDAfter, err := node.QuerySpecificBalance(marketAddress, coreassets.MicroUSDDenom)
+	s.Require().NoError(err)
+	s.Require().Equal(traderLunaBefore, traderLunaAfter)
+	s.Require().Equal(traderUSDBefore, traderUSDAfter)
+	s.Require().Equal(marketLunaBefore, marketLunaAfter)
+	s.Require().Equal(marketUSDBefore, marketUSDAfter)
+
+	// A second 70/30 expedited vote restores the approved MM2 spread.
+	reopenProposalID := node.SubmitExpeditedMarketSpreadProposal(openSpread, initialization.ValidatorWalletName)
+	vote(reopenProposalID, 0, 1)
+	reopenProposal := waitForProposal(reopenProposalID, func(proposal chain.GovernanceProposal) bool {
+		return proposal.Status == chain.StatusPassed
+	})
+	s.Require().True(reopenProposal.Expedited)
+	assertTally(reopenProposal, 70_000_000_000, 30_000_000_000)
+	s.Require().Equal(openSpread, querySpread())
+
+	rebuildTWAP(320)
+	fundActivePool()
+	preUSD, err := node.QuerySpecificBalance(validatorAddr, coreassets.MicroUSDDenom)
+	s.Require().NoError(err)
+	node.MarketSwap("100000uluna", coreassets.MicroUSDDenom, initialization.ValidatorWalletName)
+	postUSD, err := node.QuerySpecificBalance(validatorAddr, coreassets.MicroUSDDenom)
+	s.Require().NoError(err)
+	s.Require().True(postUSD.Amount.GT(preUSD.Amount))
+
+	node.LogActionF("Market governance E2E passed: 60%% missed the expedited threshold, while 70%% closed and reopened swaps")
 }

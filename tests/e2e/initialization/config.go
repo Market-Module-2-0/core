@@ -391,6 +391,8 @@ func updateTreasuryGenesis(treasuryGenState *treasurytypes.GenesisState) {
 
 func updateGovGenesis(govGenState *govv1.GenesisState) {
 	govGenState.Params.VotingPeriod = &OneMin
+	expeditedVotingPeriod := 30 * time.Second
+	govGenState.Params.ExpeditedVotingPeriod = &expeditedVotingPeriod
 	govGenState.Params.Quorum = sdkmath.LegacyNewDecWithPrec(2, 1).String()
 	govGenState.Params.MinDeposit = tenTerra
 }
